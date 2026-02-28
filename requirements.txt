@@ -1,0 +1,13 @@
+# SwarmCast Orchestrator Dependencies
+
+# Convex Python client for database sync
+convex>=0.5.0
+
+# Browser Use SDK for AI browser automation
+browser-use>=0.1.0
+
+# Async utilities (usually built-in, but listed for clarity)
+# asyncio is part of Python standard library
+
+# Optional: For better error handling and logging
+python-dotenv>=1.0.0
