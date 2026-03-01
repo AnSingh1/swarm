@@ -13,6 +13,9 @@ from typing import Optional, List
 from convex import ConvexClient
 from browser_use_sdk import AsyncBrowserUse
 from openai import AsyncOpenAI
+import dotenv
+
+loaded = dotenv.load_dotenv()
 
 
 # Configuration
@@ -205,15 +208,70 @@ class MissionLivestreamWatcher:
                     sessions.append(None)
                     live_urls.append(None)
             
-            # Store sessions (filter out None values)
+            # Store TikTok sessions (filter out None values)
             valid_sessions = [s for s in sessions if s is not None]
-            self.active_sessions[mission_id] = valid_sessions
             
             # Filter out None URLs
             valid_live_urls = [url for url in live_urls if url is not None]
             
-            # Update mission with all 3 live URLs
-            print(f"\n💾 Updating mission with {len(valid_live_urls)} livestream URLs...")
+            # Now create 3 YouTube Shorts sessions (agents 4, 5, and 6) using all 3 search terms
+            print(f"\n📺 Creating 3 YouTube Shorts sessions (no profiles)...")
+            youtube_sessions = []
+            youtube_live_urls = []
+            
+            # Use all 3 search terms for YouTube
+            youtube_search_terms = search_terms  # All 3 terms
+            
+            for i, search_term in enumerate(youtube_search_terms, 1):
+                agent_num = i + 3  # Agents 4, 5, and 6
+                print(f"\n🎥 YouTube Session {i}/3 (Agent {agent_num}):")
+                print(f"   🔍 Search term: {search_term}")
+                print(f"   🚫 No profile (anonymous)")
+                
+                try:
+                    # Create session WITHOUT profile_id for YouTube
+                    session = await self.browser_client.sessions.create(
+                        proxy_country_code="us"
+                        # No profile_id parameter
+                    )
+                    
+                    youtube_sessions.append(session)
+                    youtube_live_urls.append(session.live_url)
+                    
+                    print(f"   ✅ Session created: {session.id}")
+                    print(f"   📺 Live URL: {session.live_url}")
+                    
+                    # Update agent state in Convex
+                    try:
+                        self.convex_client.mutation(
+                            "agents:updateAgentState",
+                            {
+                                "agent_id": agent_num,
+                                "status": "searching",
+                                "current_url": session.live_url,
+                                "profile_id": "none",  # No profile for YouTube
+                            }
+                        )
+                        print(f"   ✅ Agent {agent_num} registered in Convex")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not register agent: {e}")
+                    
+                except Exception as e:
+                    print(f"   ❌ Error creating YouTube session {i}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    youtube_sessions.append(None)
+                    youtube_live_urls.append(None)
+            
+            # Combine all sessions
+            all_valid_sessions = valid_sessions + [s for s in youtube_sessions if s is not None]
+            self.active_sessions[mission_id] = all_valid_sessions
+            
+            # Filter YouTube URLs
+            valid_youtube_urls = [url for url in youtube_live_urls if url is not None]
+            
+            # Update mission with all 6 live URLs (3 TikTok + 3 YouTube)
+            print(f"\n💾 Updating mission with {len(valid_live_urls) + len(valid_youtube_urls)} livestream URLs...")
             update_args = {
                 "missionId": str(mission_id) if not isinstance(mission_id, str) else mission_id,
                 "liveUrl": valid_live_urls[0] if len(valid_live_urls) > 0 else "",
@@ -221,10 +279,19 @@ class MissionLivestreamWatcher:
             }
             if len(valid_live_urls) > 1:
                 update_args["liveUrl2"] = valid_live_urls[1]
-                print(f"   📺 Stream 2: {valid_live_urls[1][:50]}...")
+                print(f"   📺 TikTok 2: {valid_live_urls[1][:50]}...")
             if len(valid_live_urls) > 2:
                 update_args["liveUrl3"] = valid_live_urls[2]
-                print(f"   📺 Stream 3: {valid_live_urls[2][:50]}...")
+                print(f"   📺 TikTok 3: {valid_live_urls[2][:50]}...")
+            if len(valid_youtube_urls) > 0:
+                update_args["liveUrl4"] = valid_youtube_urls[0]
+                print(f"   🎥 YouTube 1: {valid_youtube_urls[0][:50]}...")
+            if len(valid_youtube_urls) > 1:
+                update_args["liveUrl5"] = valid_youtube_urls[1]
+                print(f"   🎥 YouTube 2: {valid_youtube_urls[1][:50]}...")
+            if len(valid_youtube_urls) > 2:
+                update_args["liveUrl6"] = valid_youtube_urls[2]
+                print(f"   🎥 YouTube 3: {valid_youtube_urls[2][:50]}...")
             
             print(f"   🔍 Debug - Update args: {update_args.keys()}")
             
@@ -233,13 +300,23 @@ class MissionLivestreamWatcher:
                 update_args
             )
             
-            print(f"\n🎬 Starting parallel TikTok analysis on {len(valid_sessions)} sessions...\n")
+            print(f"\n🎬 Starting parallel analysis: {len(valid_sessions)} TikTok + {len([s for s in youtube_sessions if s is not None])} YouTube...\n")
             
-            # Run all sessions concurrently (filter valid sessions)
+            # Run all sessions concurrently
             analysis_tasks = []
+            
+            # TikTok sessions (agents 1, 2, 3)
             for i, (session, search_term) in enumerate([(s, st) for s, st in zip(sessions, search_terms) if s is not None], 1):
                 task = asyncio.create_task(
                     self.run_single_session_analysis(session, search_term, i)
+                )
+                analysis_tasks.append(task)
+            
+            # YouTube sessions (agents 4, 5, 6)
+            for i, (session, search_term) in enumerate([(s, st) for s, st in zip(youtube_sessions, youtube_search_terms) if s is not None], 1):
+                agent_num = i + 3
+                task = asyncio.create_task(
+                    self.run_youtube_shorts_analysis(session, search_term, agent_num)
                 )
                 analysis_tasks.append(task)
             
@@ -252,14 +329,20 @@ class MissionLivestreamWatcher:
             print(f"🎉 ALL SESSIONS COMPLETE!")
             print(f"{'='*60}\n")
             
+            num_tiktok = len([s for s in sessions if s is not None])
+            num_youtube = len([s for s in youtube_sessions if s is not None])
+            
             for i, result in enumerate(results, 1):
+                platform = "TikTok" if i <= num_tiktok else "YouTube"
                 if isinstance(result, Exception):
-                    print(f"Session {i}: ❌ Error - {result}")
+                    print(f"Session {i} ({platform}): ❌ Error - {result}")
                 elif isinstance(result, dict):
                     total_discoveries += result.get('discoveries', 0)
-                    print(f"Session {i}: ✅ {result.get('discoveries', 0)} discoveries logged")
+                    print(f"Session {i} ({platform}): ✅ {result.get('discoveries', 0)} discoveries logged")
             
-            print(f"\n📊 TOTAL DISCOVERIES ACROSS ALL SESSIONS: {total_discoveries}")
+            print(f"\n📊 TOTAL DISCOVERIES: {total_discoveries}")
+            print(f"   - TikTok Sessions: {num_tiktok}")
+            print(f"   - YouTube Sessions: {num_youtube}")
             print(f"{'='*60}\n")
             
         except Exception as e:
@@ -566,6 +649,289 @@ Examples:
             import traceback
             traceback.print_exc()
             return {"discoveries": 0, "screenshots": []}
+    
+    async def run_youtube_shorts_analysis(self, session, search_term: str, session_num: int):
+        """Run analysis on a single YouTube Shorts session."""
+        try:
+            print(f"[YT Session {session_num}] 🔍 Starting search for: {search_term}")
+            
+            # Update agent status to searching
+            try:
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": session_num,
+                        "status": "searching",
+                        "current_url": f"Searching YouTube for: {search_term}",
+                        "profile_id": "none",
+                    }
+                )
+            except Exception as e:
+                print(f"[YT Session {session_num}] ⚠️  Could not update agent status: {e}")
+            
+            # Phase 1: Search for content on YouTube
+            search_task = f"""
+            Go to YouTube (youtube.com).
+            
+            Use the search bar to search for: "{search_term}"
+            
+            Wait for search results to load. Look for the Shorts section or Shorts videos.
+            """
+            
+            async for step in self.browser_client.run(
+                search_task,
+                session_id=session.id,
+                start_url="https://www.youtube.com",
+                max_steps=20,
+                vision=True,
+            ):
+                pass  # Complete search
+            
+            print(f"[YT Session {session_num}] ✅ Search complete\n")
+            
+            # Phase 2: Click on first Short and analyze
+            print(f"[YT Session {session_num}] 🎥 Analyzing YouTube Shorts...\n")
+            
+            discoveries_count = 0
+            discovered_screenshots = []
+            
+            # Analyze 15-20 Shorts one at a time
+            for video_num in range(1, 21):
+                print(f"[YT Session {session_num}] 📹 Short {video_num}/20 - Starting analysis...")
+                
+                try:
+                    # Step 1: Click on a Short (or navigate to next if already in Shorts player)
+                    if video_num == 1:
+                        print(f"[YT Session {session_num}]    🖱️  Finding and clicking first Short...")
+                        click_short_task = f"""
+                        You are on YouTube search results for "{search_term}".
+                        
+                        Look for the Shorts section or find a Short video (vertical video format).
+                        Click on the FIRST Short you see to open the Shorts player.
+                        """
+                        
+                        async for step in self.browser_client.run(
+                            click_short_task,
+                            session_id=session.id,
+                            max_steps=15,
+                            vision=True,
+                        ):
+                            pass
+                    else:
+                        # Navigate to next Short using keyboard or swipe
+                        print(f"[YT Session {session_num}]    ⬇️  Moving to next Short...")
+                        next_short_task = """
+                        You are in the YouTube Shorts player.
+                        Swipe down or scroll down to go to the next Short video.
+                        Wait for the next Short to load.
+                        """
+                        
+                        async for step in self.browser_client.run(
+                            next_short_task,
+                            session_id=session.id,
+                            max_steps=8,
+                            vision=True,
+                        ):
+                            pass
+                    
+                    # Step 2: Wait for Short to load
+                    print(f"[YT Session {session_num}]    ⏱️  Waiting for Short to load...")
+                    await asyncio.sleep(3)
+                    
+                    # Step 3: Get current URL
+                    current_url = None
+                    get_url_task = "What is the current URL?"
+                    async for step in self.browser_client.run(
+                        get_url_task,
+                        session_id=session.id,
+                        max_steps=2,
+                        vision=True,
+                    ):
+                        if step.url:
+                            current_url = step.url
+                    
+                    if not current_url:
+                        print(f"[YT Session {session_num}]    ⚠️  Could not get video URL, skipping...")
+                        continue
+                    
+                    print(f"[YT Session {session_num}]    ✅ Current Short: {current_url[:60]}...")
+                    
+                    # Step 4: Take screenshot and use OCR to detect likes
+                    print(f"[YT Session {session_num}]    📸 Taking screenshot for OCR analysis...")
+                    screenshot_task = "Take a screenshot of the current YouTube Short showing the video and its metrics."
+                    screenshot_url = None
+                    
+                    async for step in self.browser_client.run(
+                        screenshot_task,
+                        session_id=session.id,
+                        max_steps=2,
+                        vision=True,
+                    ):
+                        if hasattr(step, 'screenshot_url') and step.screenshot_url:
+                            screenshot_url = step.screenshot_url
+                    
+                    if not screenshot_url:
+                        print(f"[YT Session {session_num}]    ⚠️  Could not capture screenshot, skipping...")
+                        continue
+                    
+                    print(f"[YT Session {session_num}]    🔍 Running OCR on screenshot...")
+                    
+                    # Use OpenAI Vision API to read the likes number
+                    likes_count = 0
+                    is_viral = False
+                    
+                    try:
+                        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+                        
+                        response = await client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": """Look at this YouTube Short screenshot. Find the thumbs up (like) icon and read the number next to it.
+
+The number might be formatted as:
+- Plain number like "1.5K" or "234"
+- With K like "12K" or "450K"
+- With M like "1.5M" or "2M"
+
+Respond with ONLY the number you see next to the thumbs up icon. Just the number, nothing else.
+
+Examples:
+- If you see "1.5K" → respond "1.5K"
+- If you see "234" → respond "234"
+- If you see "12K" → respond "12K"
+"""
+                                        },
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": screenshot_url
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            max_tokens=50
+                        )
+                        
+                        ocr_result = response.choices[0].message.content.strip()
+                        print(f"[YT Session {session_num}]    📊 OCR Result: {ocr_result}")
+                        
+                        # Parse the likes count
+                        patterns = [
+                            r'(\d+\.?\d*)[Mm]',  # Matches 1.2M, 5M
+                            r'(\d+\.?\d*)[Kk]',  # Matches 1.2K, 450K
+                            r'(\d+)',             # Matches plain numbers
+                        ]
+                        
+                        for pattern in patterns:
+                            match = re.search(pattern, ocr_result)
+                            if match:
+                                number_str = match.group(0)
+                                
+                                # Convert to integer
+                                if 'M' in number_str.upper():
+                                    likes_count = int(float(number_str.replace('M', '').replace('m', '')) * 1_000_000)
+                                elif 'K' in number_str.upper():
+                                    likes_count = int(float(number_str.replace('K', '').replace('k', '')) * 1_000)
+                                else:
+                                    likes_count = int(number_str.replace(',', ''))
+                                
+                                print(f"[YT Session {session_num}]    📈 Parsed likes: {likes_count:,}")
+                                break
+                        
+                        # Check if it meets threshold (50+ likes)
+                        if likes_count >= 50:
+                            is_viral = True
+                            print(f"[YT Session {session_num}]    ✅ VIRAL! ({likes_count:,} likes >= 50)")
+                        else:
+                            print(f"[YT Session {session_num}]    ⏭️  Not viral ({likes_count:,} likes < 50)")
+                            
+                    except Exception as e:
+                        print(f"[YT Session {session_num}]    ⚠️  OCR Error: {e}")
+                        print(f"[YT Session {session_num}]    ⏭️  Skipping this Short")
+                        is_viral = False
+                    
+                    # Only log if viral
+                    if is_viral and current_url:
+                        try:
+                            # Log to Convex
+                            self.convex_client.mutation(
+                                "discoveries:logDiscovery",
+                                {
+                                    "video_url": current_url,
+                                    "thumbnail": screenshot_url if screenshot_url else "",
+                                    "found_by_agent_id": session_num,
+                                }
+                            )
+                            discoveries_count += 1
+                            
+                            # Update agent status to found_trend
+                            try:
+                                self.convex_client.mutation(
+                                    "agents:updateAgentState",
+                                    {
+                                        "agent_id": session_num,
+                                        "status": "found_trend",
+                                        "current_url": current_url,
+                                        "profile_id": "none",
+                                    }
+                                )
+                            except Exception as e:
+                                print(f"[YT Session {session_num}]    ⚠️  Could not update agent status: {e}")
+                            
+                            # Store screenshot info
+                            discovery_info = {
+                                "url": current_url,
+                                "screenshot": screenshot_url,
+                                "metrics": f"{likes_count:,} likes"
+                            }
+                            discovered_screenshots.append(discovery_info)
+                            
+                            print(f"[YT Session {session_num}]    ✨ DISCOVERY #{discoveries_count} LOGGED!")
+                            print(f"[YT Session {session_num}]    🔗 {current_url}")
+                            print(f"[YT Session {session_num}]    💖 {likes_count:,} likes")
+                            print(f"[YT Session {session_num}]    📸 Screenshot: {screenshot_url}")
+                        except Exception as e:
+                            print(f"[YT Session {session_num}]    ⚠️  Error logging discovery: {e}")
+                    
+                    # Small pause before next Short
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    print(f"[YT Session {session_num}]    ❌ Error: {e}")
+                    await asyncio.sleep(1)
+                    continue
+            
+            print(f"\n[YT Session {session_num}] 🎉 Analysis complete!")
+            print(f"[YT Session {session_num}] 📊 Discoveries logged: {discoveries_count}/20\n")
+            
+            # Update agent status to idle
+            try:
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": session_num,
+                        "status": "idle",
+                        "current_url": "Analysis complete",
+                        "profile_id": "none",
+                    }
+                )
+            except Exception as e:
+                print(f"[YT Session {session_num}] ⚠️  Could not update agent status: {e}")
+            
+            return {"discoveries": discoveries_count, "screenshots": discovered_screenshots}
+            
+        except Exception as e:
+            print(f"[YT Session {session_num}] ❌ Error in YouTube session: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"discoveries": 0, "screenshots": []}
+    
     
     async def cleanup_session(self, mission_id):
         """Clean up all sessions for a mission."""

@@ -18,9 +18,15 @@ export default function Home() {
       hasLiveUrl: !!latestMission.liveUrl,
       hasLiveUrl2: !!latestMission.liveUrl2,
       hasLiveUrl3: !!latestMission.liveUrl3,
+      hasLiveUrl4: !!latestMission.liveUrl4,
+      hasLiveUrl5: !!latestMission.liveUrl5,
+      hasLiveUrl6: !!latestMission.liveUrl6,
       liveUrl: latestMission.liveUrl?.substring(0, 50),
       liveUrl2: latestMission.liveUrl2?.substring(0, 50),
       liveUrl3: latestMission.liveUrl3?.substring(0, 50),
+      liveUrl4: latestMission.liveUrl4?.substring(0, 50),
+      liveUrl5: latestMission.liveUrl5?.substring(0, 50),
+      liveUrl6: latestMission.liveUrl6?.substring(0, 50),
     });
   }
   
@@ -62,19 +68,20 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Livestream View - 3 Streams */}
-      {(latestMission?.liveUrl || latestMission?.liveUrl2 || latestMission?.liveUrl3) && (
+      {/* Livestream View - 6 Streams (3 TikTok + 3 YouTube) */}
+      {(latestMission?.liveUrl || latestMission?.liveUrl2 || latestMission?.liveUrl3 || latestMission?.liveUrl4 || latestMission?.liveUrl5 || latestMission?.liveUrl6) && (
         <div className="mb-8 p-4 border border-green-600 rounded">
           <h2 className="text-xl font-semibold mb-4 text-green-400">
-            🔴 Live TikTok Streams ({[latestMission.liveUrl, latestMission.liveUrl2, latestMission.liveUrl3].filter(Boolean).length})
+            🔴 Live Streams ({[latestMission.liveUrl, latestMission.liveUrl2, latestMission.liveUrl3, latestMission.liveUrl4, latestMission.liveUrl5, latestMission.liveUrl6].filter(Boolean).length})
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="mb-2 text-sm text-gray-400">3 TikTok + 3 YouTube Shorts</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {latestMission.liveUrl && (
               <div className="bg-gray-900 rounded overflow-hidden">
-                <div className="text-sm font-semibold p-2 bg-green-900">Stream 1</div>
+                <div className="text-sm font-semibold p-2 bg-blue-900">TikTok 1</div>
                 <iframe
                   src={latestMission.liveUrl}
-                  className="w-full h-[500px] border-0"
+                  className="w-full h-[400px] border-0"
                   title="Browser Livestream 1"
                   allow="autoplay; fullscreen"
                 />
@@ -82,10 +89,10 @@ export default function Home() {
             )}
             {latestMission.liveUrl2 && (
               <div className="bg-gray-900 rounded overflow-hidden">
-                <div className="text-sm font-semibold p-2 bg-green-900">Stream 2</div>
+                <div className="text-sm font-semibold p-2 bg-blue-900">TikTok 2</div>
                 <iframe
                   src={latestMission.liveUrl2}
-                  className="w-full h-[500px] border-0"
+                  className="w-full h-[400px] border-0"
                   title="Browser Livestream 2"
                   allow="autoplay; fullscreen"
                 />
@@ -93,11 +100,44 @@ export default function Home() {
             )}
             {latestMission.liveUrl3 && (
               <div className="bg-gray-900 rounded overflow-hidden">
-                <div className="text-sm font-semibold p-2 bg-green-900">Stream 3</div>
+                <div className="text-sm font-semibold p-2 bg-blue-900">TikTok 3</div>
                 <iframe
                   src={latestMission.liveUrl3}
-                  className="w-full h-[500px] border-0"
+                  className="w-full h-[400px] border-0"
                   title="Browser Livestream 3"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl4 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-red-900">YouTube 1</div>
+                <iframe
+                  src={latestMission.liveUrl4}
+                  className="w-full h-[400px] border-0"
+                  title="Browser Livestream 4"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl5 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-red-900">YouTube 2</div>
+                <iframe
+                  src={latestMission.liveUrl5}
+                  className="w-full h-[400px] border-0"
+                  title="Browser Livestream 5"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl6 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-red-900">YouTube 3</div>
+                <iframe
+                  src={latestMission.liveUrl6}
+                  className="w-full h-[400px] border-0"
+                  title="Browser Livestream 6"
                   allow="autoplay; fullscreen"
                 />
               </div>

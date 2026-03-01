@@ -28,6 +28,9 @@ export const updateMissionLivestream = mutation({
     liveUrl: v.string(),
     liveUrl2: v.optional(v.string()),
     liveUrl3: v.optional(v.string()),
+    liveUrl4: v.optional(v.string()),
+    liveUrl5: v.optional(v.string()),
+    liveUrl6: v.optional(v.string()),
     sessionId: v.string(),
     shareUrl: v.optional(v.string()),
   },
@@ -38,6 +41,9 @@ export const updateMissionLivestream = mutation({
     };
     if (args.liveUrl2) update.liveUrl2 = args.liveUrl2;
     if (args.liveUrl3) update.liveUrl3 = args.liveUrl3;
+    if (args.liveUrl4) update.liveUrl4 = args.liveUrl4;
+    if (args.liveUrl5) update.liveUrl5 = args.liveUrl5;
+    if (args.liveUrl6) update.liveUrl6 = args.liveUrl6;
     if (args.shareUrl) update.shareUrl = args.shareUrl;
     
     await ctx.db.patch(args.missionId, update);
