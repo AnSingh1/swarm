@@ -5,6 +5,9 @@ export default defineSchema({
   missions: defineTable({
     prompt: v.string(),
     status: v.union(v.literal("active"), v.literal("completed")),
+    liveUrl: v.optional(v.string()),
+    sessionId: v.optional(v.string()),
+    shareUrl: v.optional(v.string()),
   }),
   
   agents: defineTable({

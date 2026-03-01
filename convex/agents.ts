@@ -48,3 +48,14 @@ export const getAllAgents = query({
     return await ctx.db.query("agents").collect();
   },
 });
+
+export const deleteAllAgents = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const agents = await ctx.db.query("agents").collect();
+    for (const agent of agents) {
+      await ctx.db.delete(agent._id);
+    }
+    return { deleted: agents.length };
+  },
+});

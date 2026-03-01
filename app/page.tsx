@@ -14,6 +14,9 @@ export default function Home() {
   
   // Mutations
   const createMission = useMutation(api.missions.createMission);
+  const deleteAllMissions = useMutation(api.missions.deleteAllMissions);
+  const deleteAllAgents = useMutation(api.agents.deleteAllAgents);
+  const deleteAllDiscoveries = useMutation(api.discoveries.deleteAllDiscoveries);
   
   const handleCreateMission = async () => {
     if (missionPrompt.trim()) {
@@ -47,11 +50,42 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Livestream View */}
+      {latestMission?.liveUrl && (
+        <div className="mb-8 p-4 border border-green-600 rounded">
+          <h2 className="text-xl font-semibold mb-4 text-green-400">
+            🔴 Live TikTok Stream
+          </h2>
+          <div className="bg-gray-900 rounded overflow-hidden">
+            <iframe
+              src={latestMission.liveUrl}
+              className="w-full h-[600px] border-0"
+              title="Browser Livestream"
+              allow="autoplay; fullscreen"
+            />
+          </div>
+          {latestMission.shareUrl && (
+            <div className="mt-2 text-sm text-gray-400">
+              Share URL: <a href={latestMission.shareUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{latestMission.shareUrl}</a>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Three Column Layout */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Current Mission */}
         <div className="border border-yellow-600 rounded p-4">
-          <h2 className="text-xl font-bold mb-4 text-yellow-400">Current Mission</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-yellow-400">Current Mission</h2>
+            <button
+              onClick={() => deleteAllMissions()}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm font-semibold"
+              disabled={!latestMission}
+            >
+              Delete All
+            </button>
+          </div>
           <div className="bg-gray-900 p-3 rounded overflow-auto max-h-96">
             <pre className="text-xs text-green-400 whitespace-pre-wrap">
               {latestMission === undefined 
@@ -65,9 +99,18 @@ export default function Home() {
 
         {/* Live Agent States */}
         <div className="border border-purple-600 rounded p-4">
-          <h2 className="text-xl font-bold mb-4 text-purple-400">
-            Live Agent States ({allAgents?.length ?? 0})
-          </h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-purple-400">
+              Live Agent States ({allAgents?.length ?? 0})
+            </h2>
+            <button
+              onClick={() => deleteAllAgents()}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm font-semibold"
+              disabled={!allAgents || allAgents.length === 0}
+            >
+              Delete All
+            </button>
+          </div>
           <div className="bg-gray-900 p-3 rounded overflow-auto max-h-96">
             <pre className="text-xs text-green-400 whitespace-pre-wrap">
               {allAgents === undefined 
@@ -81,9 +124,18 @@ export default function Home() {
 
         {/* Latest Discoveries */}
         <div className="border border-cyan-600 rounded p-4">
-          <h2 className="text-xl font-bold mb-4 text-cyan-400">
-            Latest Discoveries ({discoveries?.length ?? 0})
-          </h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-cyan-400">
+              Latest Discoveries ({discoveries?.length ?? 0})
+            </h2>
+            <button
+              onClick={() => deleteAllDiscoveries()}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm font-semibold"
+              disabled={!discoveries || discoveries.length === 0}
+            >
+              Delete All
+            </button>
+          </div>
           <div className="bg-gray-900 p-3 rounded overflow-auto max-h-96">
             <pre className="text-xs text-green-400 whitespace-pre-wrap">
               {discoveries === undefined 

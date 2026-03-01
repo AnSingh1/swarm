@@ -23,3 +23,14 @@ export const getDiscoveries = query({
     return await ctx.db.query("discoveries").order("desc").collect();
   },
 });
+
+export const deleteAllDiscoveries = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const discoveries = await ctx.db.query("discoveries").collect();
+    for (const discovery of discoveries) {
+      await ctx.db.delete(discovery._id);
+    }
+    return { deleted: discoveries.length };
+  },
+});
