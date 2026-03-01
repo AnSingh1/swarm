@@ -38,6 +38,9 @@ export default defineSchema({
     thumbnail: v.string(),
     found_by_agent_id: v.number(),
     keywords: v.optional(v.string()),  // 2-3 defining keywords extracted by LLM
+    likes: v.optional(v.number()),     // Number of likes
+    views: v.optional(v.number()),     // Number of views
+    comments: v.optional(v.number()),  // Number of comments
   }),
   
   logs: defineTable({

@@ -151,6 +151,7 @@ class SwarmOrchestrator:
         
         # Swarm manager control
         self.swarm_manager_task: Optional[asyncio.Task] = None
+        self.control_watcher_task: Optional[asyncio.Task] = None
         self.running = False
         
         # Original mission context
@@ -487,6 +488,63 @@ class SwarmOrchestrator:
                 continue
     
     # ========================================================================
+    # CONTROL COMMAND WATCHER
+    # ========================================================================
+    
+    async def control_watcher(self):
+        """
+        Background task that monitors for control commands (like stop_all).
+        When stop_all is detected, triggers cleanup and stops the swarm.
+        """
+        print(f"\n🎛️  CONTROL WATCHER STARTED - Monitoring for stop commands")
+        
+        while self.running:
+            try:
+                await asyncio.sleep(2)  # Check every 2 seconds
+                
+                # Query for pending stop_all commands
+                pending_commands = self.convex_client.query(
+                    "control:getPendingCommands"
+                )
+                
+                if pending_commands:
+                    for cmd in pending_commands:
+                        if cmd.get("command") == "stop_all":
+                            print(f"\n{'='*70}")
+                            print(f"🛑 STOP_ALL COMMAND RECEIVED")
+                            print(f"{'='*70}\n")
+                            
+                            # Mark command as processing
+                            self.convex_client.mutation(
+                                "control:updateCommandStatus",
+                                {
+                                    "commandId": cmd["_id"],
+                                    "status": "processing"
+                                }
+                            )
+                            
+                            # Trigger cleanup
+                            self.running = False
+                            await self.cleanup()
+                            
+                            # Mark command as completed
+                            self.convex_client.mutation(
+                                "control:updateCommandStatus",
+                                {
+                                    "commandId": cmd["_id"],
+                                    "status": "completed"
+                                }
+                            )
+                            
+                            return  # Exit the watcher
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ Control watcher error: {e}")
+                continue
+    
+    # ========================================================================
     # AGENT EXECUTION LOOPS
     # ========================================================================
     
@@ -771,13 +829,21 @@ Respond with ONLY the number. Examples:
                 discoveries = 1
                 keywords = await extract_keywords_from_content(f"TikTok video about {search_term}")
                 
+                # Estimate views (typically 10-20x likes for viral TikTok)
+                views_estimate = likes_count * 15
+                # Estimate comments (typically 2-5% of likes)
+                comments_estimate = int(likes_count * 0.03)
+                
                 self.convex_client.mutation(
                     "discoveries:logDiscovery",
                     {
                         "video_url": current_url,
                         "thumbnail": screenshot_url or "https://placeholder.com/150",
                         "found_by_agent_id": agent_id,
-                        "keywords": keywords
+                        "keywords": keywords,
+                        "likes": likes_count,
+                        "views": views_estimate,
+                        "comments": comments_estimate
                     }
                 )
                 
@@ -936,13 +1002,21 @@ Respond with ONLY the number. Examples:
                 discoveries = 1
                 keywords = await extract_keywords_from_content(f"YouTube short about {search_term}")
                 
+                # Estimate views (typically 20-50x likes for viral YouTube)
+                views_estimate = likes_count * 30
+                # Estimate comments (typically 1-3% of likes)
+                comments_estimate = int(likes_count * 0.02)
+                
                 self.convex_client.mutation(
                     "discoveries:logDiscovery",
                     {
                         "video_url": current_url,
                         "thumbnail": screenshot_url or "https://placeholder.com/150",
                         "found_by_agent_id": agent_id,
-                        "keywords": keywords
+                        "keywords": keywords,
+                        "likes": likes_count,
+                        "views": views_estimate,
+                        "comments": comments_estimate
                     }
                 )
                 
@@ -1141,6 +1215,9 @@ Respond in 2-3 sentences. If the page is RELEVANT to "{search_term}", start with
             # Start the Swarm Manager (Blackboard watcher)
             self.swarm_manager_task = asyncio.create_task(self.swarm_manager())
             
+            # Start the Control Watcher (monitors for stop_all commands)
+            self.control_watcher_task = asyncio.create_task(self.control_watcher())
+            
             print(f"\n{'='*70}")
             print(f"🐝 LAUNCHING SWARM - 9 agents working concurrently")
             print(f"{'='*70}\n")
@@ -1170,6 +1247,14 @@ Respond in 2-3 sentences. If the page is RELEVANT to "{search_term}", start with
     async def cleanup(self):
         """Clean up all agent tasks and browser sessions."""
         self.running = False
+        
+        # Cancel control watcher
+        if self.control_watcher_task and not self.control_watcher_task.done():
+            self.control_watcher_task.cancel()
+            try:
+                await self.control_watcher_task
+            except asyncio.CancelledError:
+                pass
         
         # Cancel swarm manager
         if self.swarm_manager_task and not self.swarm_manager_task.done():

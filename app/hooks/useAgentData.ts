@@ -2,15 +2,15 @@
 
 // Agent definitions for 9 agents (3 TikTok + 3 YouTube + 3 DuckDuckGo)
 export const AGENTS = [
-  { id: "tiktok-1", agentId: 1, name: "TikTok 1", color: "#00f2ea", baseRole: "Discovery", platform: "tiktok" },
-  { id: "tiktok-2", agentId: 2, name: "TikTok 2", color: "#00d4e0", baseRole: "Collection", platform: "tiktok" },
-  { id: "tiktok-3", agentId: 3, name: "TikTok 3", color: "#00b6d6", baseRole: "Analysis", platform: "tiktok" },
-  { id: "youtube-1", agentId: 4, name: "YouTube 1", color: "#ff0033", baseRole: "Discovery", platform: "youtube" },
-  { id: "youtube-2", agentId: 5, name: "YouTube 2", color: "#e6002e", baseRole: "Collection", platform: "youtube" },
-  { id: "youtube-3", agentId: 6, name: "YouTube 3", color: "#cc0029", baseRole: "Analysis", platform: "youtube" },
-  { id: "ddg-1", agentId: 7, name: "DuckDuckGo 1", color: "#a855f7", baseRole: "Discovery", platform: "duckduckgo" },
-  { id: "ddg-2", agentId: 8, name: "DuckDuckGo 2", color: "#9333ea", baseRole: "Collection", platform: "duckduckgo" },
-  { id: "ddg-3", agentId: 9, name: "DuckDuckGo 3", color: "#7c3aed", baseRole: "Analysis", platform: "duckduckgo" },
+  { id: "tiktok-1", agentId: 1, name: "Vibe", color: "#00f2ea", baseRole: "Discovery", platform: "tiktok" },
+  { id: "tiktok-2", agentId: 2, name: "Pulse", color: "#00d4e0", baseRole: "Collection", platform: "tiktok" },
+  { id: "tiktok-3", agentId: 3, name: "Rhythm", color: "#00b6d6", baseRole: "Analysis", platform: "tiktok" },
+  { id: "youtube-1", agentId: 4, name: "Echo", color: "#ff0033", baseRole: "Discovery", platform: "youtube" },
+  { id: "youtube-2", agentId: 5, name: "Nova", color: "#e6002e", baseRole: "Collection", platform: "youtube" },
+  { id: "youtube-3", agentId: 6, name: "Blaze", color: "#cc0029", baseRole: "Analysis", platform: "youtube" },
+  { id: "ddg-1", agentId: 7, name: "Cipher", color: "#a855f7", baseRole: "Discovery", platform: "duckduckgo" },
+  { id: "ddg-2", agentId: 8, name: "Nexus", color: "#9333ea", baseRole: "Collection", platform: "duckduckgo" },
+  { id: "ddg-3", agentId: 9, name: "Oracle", color: "#7c3aed", baseRole: "Analysis", platform: "duckduckgo" },
 ] as const;
 
 export type AgentId = (typeof AGENTS)[number]["id"];
@@ -48,6 +48,9 @@ export interface DiscoveredContent {
   thumbnail: string;
   found_by_agent_id: number;
   keywords?: string;
+  likes?: number;
+  views?: number;
+  comments?: number;
 }
 
 export const PLATFORM_COLORS: Record<string, string> = {

@@ -7,6 +7,9 @@ export const logDiscovery = mutation({
     thumbnail: v.string(),
     found_by_agent_id: v.number(),
     keywords: v.optional(v.string()),  // 2-3 defining keywords
+    likes: v.optional(v.number()),
+    views: v.optional(v.number()),
+    comments: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const discoveryId = await ctx.db.insert("discoveries", {
@@ -14,6 +17,9 @@ export const logDiscovery = mutation({
       thumbnail: args.thumbnail,
       found_by_agent_id: args.found_by_agent_id,
       keywords: args.keywords,
+      likes: args.likes,
+      views: args.views,
+      comments: args.comments,
     });
     return discoveryId;
   },

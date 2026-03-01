@@ -11,6 +11,8 @@ import {
   ExternalLink,
   Eye,
   Play,
+  MessageSquare,
+  Heart,
 } from "lucide-react";
 import { getAgentById, PLATFORM_COLORS } from "../hooks/useAgentData";
 
@@ -50,6 +52,9 @@ export const ContentNode = memo(function ContentNode({ data }: NodeProps) {
     found_by_agent_id,
     keywords,
     _creationTime,
+    likes,
+    views,
+    comments,
   } = data as Record<string, unknown>;
 
   const agent = getAgentById(found_by_agent_id as number);
@@ -234,6 +239,7 @@ export const ContentNode = memo(function ContentNode({ data }: NodeProps) {
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            marginBottom: 8,
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -243,15 +249,57 @@ export const ContentNode = memo(function ContentNode({ data }: NodeProps) {
           </span>
         </a>
 
+        {/* Engagement metrics */}
+        {(typeof likes === 'number' || typeof views === 'number' || typeof comments === 'number') && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 8,
+              paddingBottom: 8,
+              borderBottom: "1px solid #141822",
+            }}
+          >
+            {typeof views === 'number' && (
+              <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <Eye size={9} style={{ color: "#667" }} />
+                <span style={{ fontSize: 8, color: "#889", fontWeight: 600 }}>
+                  {views >= 1000000 ? `${(views / 1000000).toFixed(1)}M` :
+                   views >= 1000 ? `${(views / 1000).toFixed(1)}K` :
+                   views.toLocaleString()}
+                </span>
+              </div>
+            )}
+            {typeof likes === 'number' && (
+              <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <Heart size={9} style={{ color: "#f55", fill: "#f55" }} />
+                <span style={{ fontSize: 8, color: "#889", fontWeight: 600 }}>
+                  {likes >= 1000000 ? `${(likes / 1000000).toFixed(1)}M` :
+                   likes >= 1000 ? `${(likes / 1000).toFixed(1)}K` :
+                   likes.toLocaleString()}
+                </span>
+              </div>
+            )}
+            {typeof comments === 'number' && (
+              <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <MessageSquare size={9} style={{ color: "#667" }} />
+                <span style={{ fontSize: 8, color: "#889", fontWeight: 600 }}>
+                  {comments >= 1000000 ? `${(comments / 1000000).toFixed(1)}M` :
+                   comments >= 1000 ? `${(comments / 1000).toFixed(1)}K` :
+                   comments.toLocaleString()}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Footer */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            marginTop: 8,
-            paddingTop: 8,
-            borderTop: "1px solid #141822",
           }}
         >
           <div

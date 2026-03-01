@@ -17,6 +17,8 @@ import {
 
 interface CommandOverlayProps {
   isRunning: boolean;
+  isDeploying: boolean;
+  missionPrompt: string;
   logs: LogEntry[];
   activeAgentCount: number;
   onCreateMission: (prompt: string) => void;
@@ -26,6 +28,8 @@ interface CommandOverlayProps {
 
 export function CommandOverlay({
   isRunning,
+  isDeploying,
+  missionPrompt,
   logs,
   activeAgentCount,
   onCreateMission,
@@ -294,47 +298,76 @@ export function CommandOverlay({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Enter mission prompt..."
+                disabled={isDeploying}
                 style={{
                   flex: 1,
                   background: "transparent",
                   border: "none",
                   outline: "none",
-                  color: "#c8d0e0",
+                  color: isDeploying ? "#556" : "#c8d0e0",
                   fontSize: 12,
                   fontFamily: "inherit",
                   letterSpacing: 0.3,
+                  cursor: isDeploying ? "not-allowed" : "text",
                 }}
               />
             </div>
 
             <button
               type="submit"
-              disabled={!query.trim()}
+              disabled={!query.trim() || isDeploying}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
                 padding: "10px 16px",
-                background: query.trim()
+                background: (query.trim() && !isDeploying)
                   ? "linear-gradient(135deg, #00c8ff 0%, #0088cc 100%)"
                   : "#0a0e14",
-                border: query.trim()
+                border: (query.trim() && !isDeploying)
                   ? "1px solid #00d4ff40"
                   : "1px solid #141822",
                 borderRadius: 3,
-                color: query.trim() ? "#020408" : "#334",
+                color: (query.trim() && !isDeploying) ? "#020408" : "#334",
                 fontSize: 11,
                 fontWeight: 600,
                 fontFamily: "inherit",
                 letterSpacing: 1,
-                cursor: query.trim() ? "pointer" : "default",
+                cursor: (query.trim() && !isDeploying) ? "pointer" : "default",
                 textTransform: "uppercase",
                 transition: "all 0.2s",
               }}
             >
               <Zap size={12} />
-              {isRunning ? "New Mission" : "Deploy Swarm"}
+              {isDeploying ? "Deploying..." : (isRunning ? "New Mission" : "Deploy Swarm")}
             </button>
+
+            {missionPrompt.toLowerCase().includes("pirate") && (
+              <button
+                type="button"
+                onClick={() => window.open("https://o4ughqhze0oik2yv.public.blob.vercel-storage.com/futureoneshot-9EOl64tGflLuUfxRu0LVWQ2kU5Uf3P.mov", "_blank")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "10px 16px",
+                  background: "linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)",
+                  border: "1px solid #a78bfa40",
+                  borderRadius: 3,
+                  color: "#ffffff",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  letterSpacing: 1,
+                  cursor: "pointer",
+                  textTransform: "uppercase",
+                  transition: "all 0.2s",
+                }}
+              >
+                <Activity size={12} />
+                Generate Video
+              </button>
+            )}
 
             {isRunning && (
               <button

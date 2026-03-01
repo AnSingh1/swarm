@@ -33,12 +33,25 @@ interface ActiveParticle {
 export function SignalParticles({ signals }: { signals: AgentSignal[] }) {
   const [particles, setParticles] = useState<ActiveParticle[]>([]);
   const processedRef = useRef(new Set<string>());
+  const processedOrderRef = useRef<string[]>([]);
+  const MAX_PROCESSED_SIZE = 1000;
 
   useEffect(() => {
     if (signals.length === 0) return;
     const latest = signals[0];
     if (processedRef.current.has(latest._id)) return;
+    
+    // Add to Set and track order
     processedRef.current.add(latest._id);
+    processedOrderRef.current.push(latest._id);
+    
+    // If we exceed max size, remove oldest entries (FIFO)
+    if (processedRef.current.size > MAX_PROCESSED_SIZE) {
+      const toRemove = processedOrderRef.current.shift();
+      if (toRemove) {
+        processedRef.current.delete(toRemove);
+      }
+    }
 
     const id = latest._id;
     

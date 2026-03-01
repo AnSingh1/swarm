@@ -67,6 +67,7 @@ const SwarmScene = dynamic(
 
 export default function Home() {
   const [missionPrompt, setMissionPrompt] = useState("");
+  const [isDeploying, setIsDeploying] = useState(false);
   
   // Queries
   const latestMission = useQuery(api.missions.getLatestMission);
@@ -125,8 +126,13 @@ export default function Home() {
   // Handlers
   const handleCreateMission = useCallback(async (prompt: string) => {
     if (prompt.trim()) {
-      await createMission({ prompt });
-      setMissionPrompt("");
+      setIsDeploying(true);
+      try {
+        await createMission({ prompt });
+        setMissionPrompt("");
+      } finally {
+        setIsDeploying(false);
+      }
     }
   }, [createMission]);
 
@@ -169,6 +175,8 @@ export default function Home() {
       {/* Command overlay sits on top of everything */}
       <CommandOverlay
         isRunning={isRunning}
+        isDeploying={isDeploying}
+        missionPrompt={latestMission?.prompt || ""}
         logs={recentLogs || []}
         activeAgentCount={activeAgentCount}
         onCreateMission={handleCreateMission}

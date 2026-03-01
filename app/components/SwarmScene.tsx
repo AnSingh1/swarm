@@ -7,6 +7,7 @@ import { AgentPlane } from "./AgentPlane";
 import { BlackboardSphere } from "./BlackboardSphere";
 import { ConnectionLines } from "./ConnectionLines";
 import { SignalParticles } from "./SignalParticle";
+import { CosmeticOrbs } from "./CosmeticOrbs";
 import { AGENTS } from "../hooks/useAgentData";
 import type { AgentSignal, AgentData } from "../hooks/useAgentData";
 
@@ -117,6 +118,7 @@ function SceneContent({ agents, signals, liveUrls, isRunning }: SceneContentProp
       })}
 
       <SignalParticles signals={signals} />
+      <CosmeticOrbs isActive={isRunning} />
 
       <fog attach="fog" args={["#020408", 8, 25]} />
     </>

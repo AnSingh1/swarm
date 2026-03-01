@@ -56,6 +56,25 @@ export const markCommandProcessing = mutation({
 });
 
 /**
+ * Update command status (generic)
+ */
+export const updateCommandStatus = mutation({
+  args: {
+    commandId: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("processing"),
+      v.literal("completed")
+    ),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.commandId as any, {
+      status: args.status,
+    });
+  },
+});
+
+/**
  * Mark a command as completed
  */
 export const markCommandCompleted = mutation({

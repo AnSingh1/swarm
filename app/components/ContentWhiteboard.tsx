@@ -46,10 +46,14 @@ export function ContentWhiteboard({ content, isRunning }: ContentWhiteboardProps
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const knownIds = useRef<Set<string>>(new Set());
+  const knownIdsOrder = useRef<string[]>([]);
+  const MAX_KNOWN_IDS = 1000;
+  const MAX_DISPLAY_NODES = 100;
 
   useEffect(() => {
     if (content.length === 0) {
       knownIds.current.clear();
+      knownIdsOrder.current = [];
       setNodes([]);
       setEdges([]);
       return;
@@ -58,11 +62,27 @@ export function ContentWhiteboard({ content, isRunning }: ContentWhiteboardProps
     const newItems = content.filter((c) => !knownIds.current.has(c._id));
     if (newItems.length === 0 && nodes.length > 0) return;
 
-    // Add all items to known set
-    content.forEach((c) => knownIds.current.add(c._id));
+    // Add new items to known set and maintain order
+    content.forEach((c) => {
+      if (!knownIds.current.has(c._id)) {
+        knownIds.current.add(c._id);
+        knownIdsOrder.current.push(c._id);
+        
+        // If we exceed max size, remove oldest entries (FIFO)
+        if (knownIds.current.size > MAX_KNOWN_IDS) {
+          const toRemove = knownIdsOrder.current.shift();
+          if (toRemove) {
+            knownIds.current.delete(toRemove);
+          }
+        }
+      }
+    });
+
+    // Limit displayed content to most recent items to prevent memory/performance issues
+    const displayContent = content.slice(0, MAX_DISPLAY_NODES);
 
     // Build content nodes with grid placement
-    const contentNodes: Node[] = content.map((item, idx) => {
+    const contentNodes: Node[] = displayContent.map((item, idx) => {
       const col = idx % COLS;
       const row = Math.floor(idx / COLS);
       return {
@@ -78,7 +98,7 @@ export function ContentWhiteboard({ content, isRunning }: ContentWhiteboardProps
 
     // Build agent cluster nodes
     const agentGroups = new Map<number, DiscoveredContent[]>();
-    content.forEach((c) => {
+    displayContent.forEach((c) => {
       const list = agentGroups.get(c.found_by_agent_id) || [];
       list.push(c);
       agentGroups.set(c.found_by_agent_id, list);
@@ -108,7 +128,7 @@ export function ContentWhiteboard({ content, isRunning }: ContentWhiteboardProps
     setNodes([...contentNodes, ...clusterNodes]);
 
     // Build edges: content -> its agent cluster
-    const newEdges: Edge[] = content.map((c) => {
+    const newEdges: Edge[] = displayContent.map((c) => {
       const agent = getAgentById(c.found_by_agent_id);
       return {
         id: `edge-${c._id}`,

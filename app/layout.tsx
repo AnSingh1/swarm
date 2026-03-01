@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SwarmCast",
+  title: "Swarm",
   description: "AI Agent Swarm Discovery Platform",
 };
 
