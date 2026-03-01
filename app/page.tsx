@@ -11,6 +11,8 @@ export default function Home() {
   const latestMission = useQuery(api.missions.getLatestMission);
   const allAgents = useQuery(api.agents.getAllAgents);
   const discoveries = useQuery(api.discoveries.getDiscoveries);
+  // @ts-ignore - logs API will be available after running `npx convex dev`
+  const recentLogs = useQuery(api.logs?.getRecentLogs, { limit: 50 });
   
   // Debug logging
   if (latestMission) {
@@ -32,6 +34,8 @@ export default function Home() {
   const deleteAllMissions = useMutation(api.missions.deleteAllMissions);
   const deleteAllAgents = useMutation(api.agents.deleteAllAgents);
   const deleteAllDiscoveries = useMutation(api.discoveries.deleteAllDiscoveries);
+  // @ts-ignore - control API will be available after running `npx convex dev`
+  const sendCommand = useMutation(api.control?.sendCommand);
   
   const handleCreateMission = async () => {
     if (missionPrompt.trim()) {
@@ -40,8 +44,91 @@ export default function Home() {
     }
   };
 
+  const handleStopAllSessions = async () => {
+    if (confirm("⚠️ Stop all browser sessions? This will terminate all 9 agents.")) {
+      await sendCommand({ command: "stop_all" });
+      alert("✅ Stop command sent! Agents will shut down gracefully.");
+    }
+  };
+
+  // Helper functions for log formatting
+  const getAgentColor = (agentId: number) => {
+    if (agentId === 0) return "text-gray-400"; // Swarm manager
+    if (agentId <= 3) return "text-blue-400";   // TikTok (agents 1-3)
+    if (agentId <= 6) return "text-red-400";    // YouTube (agents 4-6)
+    return "text-purple-400";                    // DuckDuckGo (agents 7-9)
+  };
+
+  const getAgentBadgeColor = (agentId: number) => {
+    if (agentId === 0) return "bg-gray-700 text-gray-300";
+    if (agentId <= 3) return "bg-blue-900 text-blue-300";
+    if (agentId <= 6) return "bg-red-900 text-red-300";
+    return "bg-purple-900 text-purple-300";
+  };
+
+  const getAgentPlatform = (agentId: number) => {
+    if (agentId === 0) return "🧠 Swarm";
+    if (agentId <= 3) return "🔵 TikTok";
+    if (agentId <= 6) return "🔴 YouTube";
+    return "🟣 DuckDuckGo";
+  };
+
+  const getLogIcon = (type: string) => {
+    switch(type) {
+      case "search": return "🔍";
+      case "analysis": return "📹";
+      case "likes": return "💖";
+      case "discovery": return "✨";
+      case "energy_gain": return "⚡️";
+      case "energy_loss": return "🔋";
+      case "task_swap": return "🔄";
+      case "status": return "📊";
+      case "error": return "❌";
+      default: return "📝";
+    }
+  };
+
   return (
     <div className="min-h-screen bg-black text-white p-8">
+      {/* Fixed Log Panel - Top Right */}
+      <div className="fixed top-4 right-4 w-96 max-h-[600px] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl overflow-hidden z-50">
+        <div className="bg-gray-800 px-4 py-3 border-b border-gray-700 sticky top-0">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            📊 Swarm Logs
+            <span className="text-xs font-normal text-gray-400">
+              (Live)
+            </span>
+          </h3>
+        </div>
+        <div className="overflow-y-auto max-h-[540px] p-3 space-y-2">
+          {recentLogs && recentLogs.length > 0 ? (
+            recentLogs.map((log: any) => (
+              <div
+                key={log._id}
+                className={`text-xs p-2 rounded ${getAgentColor(log.agent_id)} bg-gray-800 border border-gray-700`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${getAgentBadgeColor(log.agent_id)}`}>
+                    {getAgentPlatform(log.agent_id)} {log.agent_id > 0 ? log.agent_id : ""}
+                  </span>
+                  <span className="text-[10px] text-gray-500">
+                    {new Date(log.timestamp * 1000).toLocaleTimeString()}
+                  </span>
+                </div>
+                <div className="flex items-start gap-1.5">
+                  <span className="text-sm">{getLogIcon(log.type)}</span>
+                  <span className="flex-1 leading-snug">{log.message}</span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-center text-gray-500 py-8">
+              No logs yet. Start a mission to see agent activity.
+            </div>
+          )}
+        </div>
+      </div>
+
       <h1 className="text-4xl font-bold mb-8">SwarmCast Debug UI</h1>
       
       {/* Mission Input */}
@@ -68,10 +155,20 @@ export default function Home() {
       {/* Livestream View - 9 Streams (3 TikTok + 3 YouTube + 3 DuckDuckGo) */}
       {(latestMission?.liveUrl || latestMission?.liveUrl2 || latestMission?.liveUrl3 || latestMission?.liveUrl4 || latestMission?.liveUrl5 || latestMission?.liveUrl6 || latestMission?.liveUrl7 || latestMission?.liveUrl8 || latestMission?.liveUrl9) && (
         <div className="mb-8 p-4 border border-green-600 rounded">
-          <h2 className="text-xl font-semibold mb-4 text-green-400">
-            🔴 Live Streams ({[latestMission.liveUrl, latestMission.liveUrl2, latestMission.liveUrl3, latestMission.liveUrl4, latestMission.liveUrl5, latestMission.liveUrl6, latestMission.liveUrl7, latestMission.liveUrl8, latestMission.liveUrl9].filter(Boolean).length})
-          </h2>
-          <div className="mb-2 text-sm text-gray-400">3 TikTok + 3 YouTube + 3 DuckDuckGo</div>
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h2 className="text-xl font-semibold text-green-400">
+                🔴 Live Streams ({[latestMission.liveUrl, latestMission.liveUrl2, latestMission.liveUrl3, latestMission.liveUrl4, latestMission.liveUrl5, latestMission.liveUrl6, latestMission.liveUrl7, latestMission.liveUrl8, latestMission.liveUrl9].filter(Boolean).length})
+              </h2>
+              <div className="text-sm text-gray-400">3 TikTok + 3 YouTube + 3 DuckDuckGo</div>
+            </div>
+            <button
+              onClick={handleStopAllSessions}
+              className="px-6 py-3 bg-red-600 hover:bg-red-700 rounded font-bold text-white shadow-lg hover:shadow-xl transition-all"
+            >
+              🛑 Stop All Sessions
+            </button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {latestMission.liveUrl && (
               <div className="bg-gray-900 rounded overflow-hidden">

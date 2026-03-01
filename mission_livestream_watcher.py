@@ -9,6 +9,8 @@ import asyncio
 import os
 import sys
 import re
+import time
+import json
 from typing import Optional, List
 from convex import ConvexClient
 from browser_use_sdk import AsyncBrowserUse
@@ -101,6 +103,14 @@ class MissionLivestreamWatcher:
         self.active_sessions = {}
         self.profile_id: Optional[str] = None
         
+        # SWARM INTELLIGENCE ADDITIONS
+        self.agent_energy = {}  # agent_id -> energy level
+        self.agent_tasks = {}  # agent_id -> asyncio Task
+        self.discovered_competitors = set()  # Track discovered competitor names
+        self.original_search_terms = []  # The 3 original competitors
+        self.swarm_manager_task: Optional[asyncio.Task] = None
+        self.swarm_running = False
+        
     async def get_profile_ids(self):
         """Return 3 profile IDs for concurrent sessions."""
         return [
@@ -108,6 +118,177 @@ class MissionLivestreamWatcher:
             "31203964-ed13-454f-a27e-0c3054751a8a",
             "8e063dd1-26ab-40ff-bf10-74813b2933e6"
         ]
+    
+    async def extract_keywords_from_content(self, content_description: str) -> str:
+        """
+        Use LLM to extract 2-3 defining keywords from discovered content.
+        This feeds the Blackboard for exploitation by other agents.
+        """
+        try:
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Extract 2-3 key defining words from this content description. Return only the keywords separated by commas, lowercase, no extra text."
+                    },
+                    {
+                        "role": "user",
+                        "content": content_description
+                    }
+                ],
+                max_tokens=30,
+                temperature=0.3
+            )
+            keywords = response.choices[0].message.content.strip()
+            return keywords
+        except Exception as e:
+            print(f"   ⚠️  Keyword extraction failed: {e}")
+            return "trending, viral, popular"  # fallback
+    
+    def log(self, agent_id: int, message: str, log_type: str, metadata: dict = None):
+        """
+        Helper to log agent activity to Convex.
+        
+        Args:
+            agent_id: The agent ID (1-9, or 0 for swarm manager)
+            message: The log message
+            log_type: One of: search, analysis, likes, discovery, energy_gain, energy_loss, task_swap, status, error
+            metadata: Optional dict with extra data
+        """
+        try:
+            self.convex_client.mutation(
+                "logs:addLog",
+                {
+                    "agent_id": agent_id,
+                    "message": message,
+                    "type": log_type,
+                    "timestamp": time.time(),
+                    "metadata": json.dumps(metadata) if metadata else None,
+                }
+            )
+        except Exception as e:
+            # Don't let logging failures break the agent
+            print(f"[Log Error] Agent {agent_id}: {e}")
+    
+    async def swarm_manager(self):
+        """
+        **BLACKBOARD ARCHITECTURE - SWARM MANAGER**
+        
+        This background task polls Convex every 10 seconds to:
+        1. Check for weak agents (energy <= 0)
+        2. Query the Blackboard (discoveries table) for latest successful find
+        3. Reassign weak agents to exploit that discovery
+        4. Check for stop commands from the UI
+        """
+        print(f"\n🧠 SWARM MANAGER STARTED - Monitoring agent energy every 10s")
+        
+        while self.swarm_running:
+            try:
+                await asyncio.sleep(10)
+                
+                # CHECK FOR STOP COMMAND
+                try:
+                    pending_commands = self.convex_client.query("control:getPendingCommands")
+                    for cmd in pending_commands:
+                        if cmd["command"] == "stop_all":
+                            print(f"\n{'='*70}")
+                            print(f"🛑 STOP COMMAND RECEIVED FROM UI")
+                            print(f"{'='*70}")
+                            
+                            # Mark command as processing
+                            self.convex_client.mutation("control:markCommandProcessing", {"commandId": cmd["_id"]})
+                            
+                            # Stop the swarm
+                            self.swarm_running = False
+                            
+                            # Log the stop
+                            self.log(0, "Stop command received - shutting down all agents", "status")
+                            
+                            # Mark command as completed
+                            self.convex_client.mutation("control:markCommandCompleted", {"commandId": cmd["_id"]})
+                            
+                            print("✅ Graceful shutdown initiated...")
+                            return
+                except Exception as e:
+                    # Don't let command checking break the swarm manager
+                    pass
+                
+                # Find weak agents
+                weak_agents = [agent_id for agent_id, energy in self.agent_energy.items() if energy <= 0]
+                
+                if not weak_agents:
+                    continue
+                
+                print(f"\n{'='*70}")
+                print(f"⚠️  SWARM MANAGER: Found {len(weak_agents)} weak agent(s)")
+                
+                # Query the Blackboard for the latest discovery
+                try:
+                    latest_discovery = self.convex_client.query("discoveries:getLatestDiscovery")
+                except:
+                    latest_discovery = None
+                
+                if not latest_discovery:
+                    print(f"📋 Blackboard is empty - no discoveries to exploit yet")
+                    continue
+                
+                # Extract exploitation context from the discovery
+                keywords = latest_discovery.get("keywords", "trending content")
+                finder_agent_id = latest_discovery.get("found_by_agent_id")
+                
+                print(f"📋 BLACKBOARD EXPLOITATION:")
+                print(f"   Latest discovery by Agent {finder_agent_id}")
+                print(f"   Keywords: {keywords}")
+                
+                # Reassign weak agents to exploit this discovery
+                for agent_id in weak_agents:
+                    if agent_id not in self.active_sessions or agent_id not in self.agent_tasks:
+                        continue
+                    
+                    # Determine platform
+                    if agent_id <= 3:
+                        platform = "TikTok"
+                    elif agent_id <= 6:
+                        platform = "YouTube"
+                    else:
+                        platform = "DuckDuckGo"
+                    
+                    print(f"   🔄 Reassigning Agent {agent_id} ({platform}) to exploit: {keywords}")
+                    
+                    # LOG: Task swap
+                    self.log(agent_id, f"Task swap! Exploiting: {keywords}", "task_swap", {"keywords": keywords})
+                    
+                    # Reset energy
+                    self.agent_energy[agent_id] = 100
+                    
+                    # Update status in Convex
+                    try:
+                        self.convex_client.mutation(
+                            "agents:updateAgentState",
+                            {
+                                "agent_id": agent_id,
+                                "status": "exploiting",
+                                "current_url": f"Exploiting: {keywords}",
+                                "energy": 100
+                            }
+                        )
+                    except:
+                        pass
+                    
+                    # LOG: Energy gain
+                    self.log(agent_id, f"Energy: 0 → 100 (+100)", "energy_gain", {"old": 0, "new": 100})
+                    
+                    print(f"      ✅ Energy reset to 100, now exploiting discovery")
+                
+                print(f"{'='*70}\n")
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ Swarm Manager error: {e}")
+                continue
         
     async def watch_missions(self):
         """Continuously watch for new missions and start livestreams."""
@@ -153,6 +334,19 @@ class MissionLivestreamWatcher:
             search_terms = await get_competitor_search_terms(prompt)
             profile_ids = await self.get_profile_ids()
             
+            # SWARM INTELLIGENCE: Store original competitors and initialize energy
+            self.original_search_terms = search_terms
+            self.discovered_competitors = set(term.lower() for term in search_terms)
+            print(f"\n🎯 Original Competitors (will not be re-discovered): {', '.join(search_terms)}")
+            
+            # Initialize all agent energies to 100
+            for i in range(1, 10):
+                self.agent_energy[i] = 100
+            
+            # Start swarm manager
+            self.swarm_running = True
+            self.swarm_manager_task = asyncio.create_task(self.swarm_manager())
+            
             print(f"\n📝 Original Mission: {prompt}\n")
             
             # Create 3 sessions concurrently
@@ -187,9 +381,10 @@ class MissionLivestreamWatcher:
                                 "status": "searching",
                                 "current_url": session.live_url,
                                 "profile_id": profile_id,
+                                "energy": 100,
                             }
                         )
-                        print(f"   ✅ Agent {i} registered in Convex")
+                        print(f"   ✅ Agent {i} registered in Convex (Energy: 100)")
                     except Exception as e:
                         print(f"   ⚠️  Could not register agent: {e}")
                     
@@ -250,9 +445,10 @@ class MissionLivestreamWatcher:
                                 "status": "searching",
                                 "current_url": session.live_url,
                                 "profile_id": "none",  # No profile for YouTube
+                                "energy": 100,
                             }
                         )
-                        print(f"   ✅ Agent {agent_num} registered in Convex")
+                        print(f"   ✅ Agent {agent_num} registered in Convex (Energy: 100)")
                     except Exception as e:
                         print(f"   ⚠️  Could not register agent: {e}")
                     
@@ -302,9 +498,10 @@ class MissionLivestreamWatcher:
                                 "status": "searching",
                                 "current_url": session.live_url,
                                 "profile_id": "none",  # No profile for DuckDuckGo
+                                "energy": 100,
                             }
                         )
-                        print(f"   ✅ Agent {agent_num} registered in Convex")
+                        print(f"   ✅ Agent {agent_num} registered in Convex (Energy: 100)")
                     except Exception as e:
                         print(f"   ⚠️  Could not register agent: {e}")
                     
@@ -431,9 +628,29 @@ class MissionLivestreamWatcher:
             traceback.print_exc()
         
         finally:
-            # Keep sessions alive for viewing
-            print("\n⏳ Keeping sessions alive for 30 seconds...")
-            await asyncio.sleep(30)
+            # Stop swarm manager
+            self.swarm_running = False
+            if self.swarm_manager_task and not self.swarm_manager_task.done():
+                self.swarm_manager_task.cancel()
+                try:
+                    await self.swarm_manager_task
+                except asyncio.CancelledError:
+                    pass
+            print("\n🧠 Swarm manager stopped")
+            
+            # Check if this was a user-requested stop (skip the 30s wait)
+            try:
+                pending_commands = self.convex_client.query("control:getPendingCommands")
+                user_stopped = any(cmd.get("command") == "stop_all" for cmd in pending_commands)
+            except:
+                user_stopped = False
+            
+            if not user_stopped:
+                # Keep sessions alive for viewing (only if not user-stopped)
+                print("\n⏳ Keeping sessions alive for 30 seconds...")
+                await asyncio.sleep(30)
+            else:
+                print("\n🛑 User requested stop - cleaning up immediately...")
             
             # Clean up all sessions
             if mission_id in self.active_sessions:
@@ -444,6 +661,9 @@ class MissionLivestreamWatcher:
         try:
             print(f"[Session {session_num}] 🔍 Starting search for: {search_term}")
             
+            # LOG: Search started
+            self.log(session_num, f"Searching for: {search_term}", "search", {"platform": "TikTok", "term": search_term})
+            
             # Update agent status to searching
             try:
                 self.convex_client.mutation(
@@ -453,6 +673,7 @@ class MissionLivestreamWatcher:
                         "status": "searching",
                         "current_url": f"Searching for: {search_term}",
                         "profile_id": (await self.get_profile_ids())[session_num - 1],
+                        "energy": 100,
                     }
                 )
             except Exception as e:
@@ -486,7 +707,15 @@ class MissionLivestreamWatcher:
             
             # Analyze 15-20 videos one at a time
             for video_num in range(1, 21):
+                # Check if stop was requested
+                if not self.swarm_running:
+                    print(f"[Session {session_num}] 🛑 Stop requested, ending analysis early")
+                    break
+                
                 print(f"[Session {session_num}] 📹 Video {video_num}/20 - Starting analysis...")
+                
+                # LOG: Analysis progress
+                self.log(session_num, f"Analyzing video {video_num}/20", "analysis", {"video_num": video_num, "total": 20})
                 
                 try:
                     # Step 1: Click on a viral video
@@ -613,6 +842,10 @@ Examples:
                                     likes_count = int(number_str.replace(',', ''))
                                 
                                 print(f"[Session {session_num}]    📈 Parsed likes: {likes_count:,}")
+                                
+                                # LOG: Likes found
+                                self.log(session_num, f"Found {likes_count:,} likes", "likes", {"likes": likes_count, "video_num": video_num})
+                                
                                 break
                         
                         # Check if it meets threshold (50+ likes)
@@ -630,18 +863,42 @@ Examples:
                     # Only log if viral
                     if is_viral and current_url:
                         try:
-                            # Log to Convex
+                            # Extract keywords for Blackboard
+                            keywords = await self.extract_keywords_from_content(f"TikTok video about {search_term} with {likes_count} likes")
+                            
+                            # Log to Convex with keywords
                             self.convex_client.mutation(
                                 "discoveries:logDiscovery",
                                 {
                                     "video_url": current_url,
                                     "thumbnail": screenshot_url if screenshot_url else "",
                                     "found_by_agent_id": session_num,
+                                    "keywords": keywords,
                                 }
                             )
                             discoveries_count += 1
                             
-                            # Update agent status to found_trend
+                            # SWARM INTELLIGENCE: Success! Reset energy to 100
+                            old_energy = self.agent_energy.get(session_num, 100)
+                            self.agent_energy[session_num] = 100
+                            
+                            # LOG: Discovery made
+                            self.log(session_num, f"Discovery! {keywords} ({likes_count:,} likes)", "discovery", {
+                                "keywords": keywords,
+                                "likes": likes_count,
+                                "url": current_url
+                            })
+                            
+                            # LOG: Energy gain (if energy was not already 100)
+                            if old_energy != 100:
+                                diff = 100 - old_energy
+                                self.log(session_num, f"Energy: {old_energy} → 100 (+{diff})", "energy_gain", {
+                                    "old": old_energy,
+                                    "new": 100,
+                                    "diff": diff
+                                })
+                            
+                            # Update agent status to found_trend with energy reset
                             try:
                                 self.convex_client.mutation(
                                     "agents:updateAgentState",
@@ -650,8 +907,10 @@ Examples:
                                         "status": "found_trend",
                                         "current_url": current_url,
                                         "profile_id": (await self.get_profile_ids())[session_num - 1],
+                                        "energy": 100,
                                     }
                                 )
+                                print(f"[Session {session_num}]    ⚡ Energy: {old_energy} → 100 (SUCCESS)")
                             except Exception as e:
                                 print(f"[Session {session_num}]    ⚠️  Could not update agent status: {e}")
                             
@@ -664,6 +923,7 @@ Examples:
                             discovered_screenshots.append(discovery_info)
                             
                             print(f"[Session {session_num}]    ✨ DISCOVERY #{discoveries_count} LOGGED!")
+                            print(f"[Session {session_num}]    🔑 Keywords: {keywords}")
                             print(f"[Session {session_num}]    🔗 {current_url}")
                             print(f"[Session {session_num}]    💖 {likes_count:,} likes")
                             print(f"[Session {session_num}]    📸 Screenshot: {screenshot_url}")
@@ -708,15 +968,34 @@ Examples:
             print(f"\n[Session {session_num}] 🎉 Analysis complete!")
             print(f"[Session {session_num}] 📊 Discoveries logged: {discoveries_count}/20\n")
             
+            # SWARM INTELLIGENCE: If no discoveries, deduct energy
+            if discoveries_count == 0:
+                old_energy = self.agent_energy.get(session_num, 100)
+                new_energy = max(0, old_energy - 30)
+                self.agent_energy[session_num] = new_energy
+                print(f"[Session {session_num}] ⚡ Energy deducted: {old_energy} → {new_energy} (NO DISCOVERIES)")
+                
+                # LOG: Energy loss
+                self.log(session_num, f"Energy: {old_energy} → {new_energy} (-30)", "energy_loss", {
+                    "old": old_energy,
+                    "new": new_energy,
+                    "reason": "no_discoveries"
+                })
+                
+                status = "weak" if new_energy <= 0 else "idle"
+            else:
+                status = "idle"
+            
             # Update agent status to idle
             try:
                 self.convex_client.mutation(
                     "agents:updateAgentState",
                     {
                         "agent_id": session_num,
-                        "status": "idle",
+                        "status": status,
                         "current_url": "Analysis complete",
                         "profile_id": (await self.get_profile_ids())[session_num - 1],
+                        "energy": self.agent_energy.get(session_num, 100),
                     }
                 )
             except Exception as e:
@@ -728,12 +1007,30 @@ Examples:
             print(f"[Session {session_num}] ❌ Error in session: {e}")
             import traceback
             traceback.print_exc()
+            
+            # SWARM INTELLIGENCE: Error = deduct energy
+            old_energy = self.agent_energy.get(session_num, 100)
+            new_energy = max(0, old_energy - 30)
+            self.agent_energy[session_num] = new_energy
+            print(f"[Session {session_num}] ⚡ Energy deducted: {old_energy} → {new_energy} (ERROR)")
+            
+            # LOG: Error and energy loss
+            self.log(session_num, f"Error: {str(e)[:50]}", "error", {"error": str(e)})
+            self.log(session_num, f"Energy: {old_energy} → {new_energy} (-30)", "energy_loss", {
+                "old": old_energy,
+                "new": new_energy,
+                "reason": "error"
+            })
+            
             return {"discoveries": 0, "screenshots": []}
     
     async def run_youtube_shorts_analysis(self, session, search_term: str, session_num: int):
         """Run analysis on a single YouTube Shorts session."""
         try:
             print(f"[YT Session {session_num}] 🔍 Starting search for: {search_term}")
+            
+            # LOG: Search started
+            self.log(session_num, f"Searching for: {search_term}", "search", {"platform": "YouTube", "term": search_term})
             
             # Update agent status to searching
             try:
@@ -744,6 +1041,7 @@ Examples:
                         "status": "searching",
                         "current_url": f"Searching YouTube for: {search_term}",
                         "profile_id": "none",
+                        "energy": 100,
                     }
                 )
             except Exception as e:
@@ -777,7 +1075,15 @@ Examples:
             
             # Analyze 15-20 Shorts one at a time
             for video_num in range(1, 21):
+                # Check if stop was requested
+                if not self.swarm_running:
+                    print(f"[YT Session {session_num}] 🛑 Stop requested, ending analysis early")
+                    break
+                
                 print(f"[YT Session {session_num}] 📹 Short {video_num}/20 - Starting analysis...")
+                
+                # LOG: Analysis progress
+                self.log(session_num, f"Analyzing Short {video_num}/20", "analysis", {"video_num": video_num, "total": 20})
                 
                 try:
                     # Step 1: Click on a Short (or navigate to next if already in Shorts player)
@@ -922,6 +1228,10 @@ Examples:
                                     likes_count = int(number_str.replace(',', ''))
                                 
                                 print(f"[YT Session {session_num}]    📈 Parsed likes: {likes_count:,}")
+                                
+                                # LOG: Likes found
+                                self.log(session_num, f"Found {likes_count:,} likes", "likes", {"likes": likes_count, "video_num": video_num})
+                                
                                 break
                         
                         # Check if it meets threshold (50+ likes)
@@ -939,18 +1249,42 @@ Examples:
                     # Only log if viral
                     if is_viral and current_url:
                         try:
-                            # Log to Convex
+                            # Extract keywords for Blackboard
+                            keywords = await self.extract_keywords_from_content(f"YouTube short about {search_term} with {likes_count} likes")
+                            
+                            # Log to Convex with keywords
                             self.convex_client.mutation(
                                 "discoveries:logDiscovery",
                                 {
                                     "video_url": current_url,
                                     "thumbnail": screenshot_url if screenshot_url else "",
                                     "found_by_agent_id": session_num,
+                                    "keywords": keywords,
                                 }
                             )
                             discoveries_count += 1
                             
-                            # Update agent status to found_trend
+                            # SWARM INTELLIGENCE: Success! Reset energy to 100
+                            old_energy = self.agent_energy.get(session_num, 100)
+                            self.agent_energy[session_num] = 100
+                            
+                            # LOG: Discovery made
+                            self.log(session_num, f"Discovery! {keywords} ({likes_count:,} likes)", "discovery", {
+                                "keywords": keywords,
+                                "likes": likes_count,
+                                "url": current_url
+                            })
+                            
+                            # LOG: Energy gain (if energy was not already 100)
+                            if old_energy != 100:
+                                diff = 100 - old_energy
+                                self.log(session_num, f"Energy: {old_energy} → 100 (+{diff})", "energy_gain", {
+                                    "old": old_energy,
+                                    "new": 100,
+                                    "diff": diff
+                                })
+                            
+                            # Update agent status to found_trend with energy reset
                             try:
                                 self.convex_client.mutation(
                                     "agents:updateAgentState",
@@ -959,8 +1293,10 @@ Examples:
                                         "status": "found_trend",
                                         "current_url": current_url,
                                         "profile_id": "none",
+                                        "energy": 100,
                                     }
                                 )
+                                print(f"[YT Session {session_num}]    ⚡ Energy: {old_energy} → 100 (SUCCESS)")
                             except Exception as e:
                                 print(f"[YT Session {session_num}]    ⚠️  Could not update agent status: {e}")
                             
@@ -973,6 +1309,7 @@ Examples:
                             discovered_screenshots.append(discovery_info)
                             
                             print(f"[YT Session {session_num}]    ✨ DISCOVERY #{discoveries_count} LOGGED!")
+                            print(f"[YT Session {session_num}]    🔑 Keywords: {keywords}")
                             print(f"[YT Session {session_num}]    🔗 {current_url}")
                             print(f"[YT Session {session_num}]    💖 {likes_count:,} likes")
                             print(f"[YT Session {session_num}]    📸 Screenshot: {screenshot_url}")
@@ -990,15 +1327,34 @@ Examples:
             print(f"\n[YT Session {session_num}] 🎉 Analysis complete!")
             print(f"[YT Session {session_num}] 📊 Discoveries logged: {discoveries_count}/20\n")
             
+            # SWARM INTELLIGENCE: If no discoveries, deduct energy
+            if discoveries_count == 0:
+                old_energy = self.agent_energy.get(session_num, 100)
+                new_energy = max(0, old_energy - 30)
+                self.agent_energy[session_num] = new_energy
+                print(f"[YT Session {session_num}] ⚡ Energy deducted: {old_energy} → {new_energy} (NO DISCOVERIES)")
+                
+                # LOG: Energy loss
+                self.log(session_num, f"Energy: {old_energy} → {new_energy} (-30)", "energy_loss", {
+                    "old": old_energy,
+                    "new": new_energy,
+                    "reason": "no_discoveries"
+                })
+                
+                status = "weak" if new_energy <= 0 else "idle"
+            else:
+                status = "idle"
+            
             # Update agent status to idle
             try:
                 self.convex_client.mutation(
                     "agents:updateAgentState",
                     {
                         "agent_id": session_num,
-                        "status": "idle",
+                        "status": status,
                         "current_url": "Analysis complete",
                         "profile_id": "none",
+                        "energy": self.agent_energy.get(session_num, 100),
                     }
                 )
             except Exception as e:
@@ -1010,12 +1366,30 @@ Examples:
             print(f"[YT Session {session_num}] ❌ Error in YouTube session: {e}")
             import traceback
             traceback.print_exc()
+            
+            # SWARM INTELLIGENCE: Error = deduct energy
+            old_energy = self.agent_energy.get(session_num, 100)
+            new_energy = max(0, old_energy - 30)
+            self.agent_energy[session_num] = new_energy
+            print(f"[YT Session {session_num}] ⚡ Energy deducted: {old_energy} → {new_energy} (ERROR)")
+            
+            # LOG: Error and energy loss
+            self.log(session_num, f"Error: {str(e)[:50]}", "error", {"error": str(e)})
+            self.log(session_num, f"Energy: {old_energy} → {new_energy} (-30)", "energy_loss", {
+                "old": old_energy,
+                "new": new_energy,
+                "reason": "error"
+            })
+            
             return {"discoveries": 0, "screenshots": []}
     
     async def run_duckduckgo_analysis(self, session, search_term: str, session_num: int):
         """Run web search and extraction analysis on DuckDuckGo."""
         try:
             print(f"[DDG Session {session_num}] 🔍 Starting search for: {search_term}")
+            
+            # LOG: Search started
+            self.log(session_num, f"Searching for: {search_term}", "search", {"platform": "DuckDuckGo", "term": search_term})
             
             # Update agent status to searching
             try:
@@ -1026,6 +1400,7 @@ Examples:
                         "status": "searching",
                         "current_url": f"Searching DuckDuckGo for: {search_term}",
                         "profile_id": "none",
+                        "energy": 100,
                     }
                 )
             except Exception as e:
@@ -1059,6 +1434,11 @@ Examples:
             
             # Visit 5-10 top search results
             for result_num in range(1, 11):
+                # Check if stop was requested
+                if not self.swarm_running:
+                    print(f"[DDG Session {session_num}] 🛑 Stop requested, ending analysis early")
+                    break
+                
                 print(f"[DDG Session {session_num}] 🔗 Result {result_num}/10 - Analyzing...")
                 
                 try:
@@ -1211,19 +1591,64 @@ Respond in a concise 2-3 sentence summary. If the page is relevant to "{search_t
                     
                     # Only log if relevant
                     if is_relevant and current_url:
+                        # SWARM INTELLIGENCE: Extract competitor name and check if new
                         try:
-                            # Log to Convex
+                            # Extract company/product name from URL or page info
+                            import re
+                            # Try to extract domain name as competitor identifier
+                            domain_match = re.search(r'https?://(?:www\.)?([^/]+)', current_url)
+                            competitor_name = domain_match.group(1).lower() if domain_match else current_url
+                            
+                            # Also try to extract from page_info
+                            company_names = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', page_info)
+                            if company_names and len(company_names[0]) > 2:
+                                competitor_name = company_names[0].lower()
+                            
+                            # Check if this competitor is already discovered (original 3 or previously found)
+                            if competitor_name in self.discovered_competitors:
+                                print(f"[DDG Session {session_num}]    ⏭️  Already discovered: {competitor_name}, skipping")
+                                continue
+                            
+                            # NEW COMPETITOR! Add to discovered set
+                            self.discovered_competitors.add(competitor_name)
+                            print(f"[DDG Session {session_num}]    🆕 NEW COMPETITOR: {competitor_name}")
+                            
+                            # Extract keywords for Blackboard
+                            keywords = await self.extract_keywords_from_content(page_info)
+                            
+                            # Log to Convex with keywords
                             self.convex_client.mutation(
                                 "discoveries:logDiscovery",
                                 {
                                     "video_url": current_url,
                                     "thumbnail": screenshot_url if screenshot_url else "",
                                     "found_by_agent_id": session_num,
+                                    "keywords": keywords,
                                 }
                             )
                             discoveries_count += 1
                             
-                            # Update agent status to found_trend
+                            # SWARM INTELLIGENCE: Success! Reset energy to 100
+                            old_energy = self.agent_energy.get(session_num, 100)
+                            self.agent_energy[session_num] = 100
+                            
+                            # LOG: Discovery made (new competitor)
+                            self.log(session_num, f"New competitor! {competitor_name} - {keywords}", "discovery", {
+                                "keywords": keywords,
+                                "competitor": competitor_name,
+                                "url": current_url
+                            })
+                            
+                            # LOG: Energy gain (if energy was not already 100)
+                            if old_energy != 100:
+                                diff = 100 - old_energy
+                                self.log(session_num, f"Energy: {old_energy} → 100 (+{diff})", "energy_gain", {
+                                    "old": old_energy,
+                                    "new": 100,
+                                    "diff": diff
+                                })
+                            
+                            # Update agent status to found_trend with energy reset
                             try:
                                 self.convex_client.mutation(
                                     "agents:updateAgentState",
@@ -1232,8 +1657,10 @@ Respond in a concise 2-3 sentence summary. If the page is relevant to "{search_t
                                         "status": "found_trend",
                                         "current_url": current_url,
                                         "profile_id": "none",
+                                        "energy": 100,
                                     }
                                 )
+                                print(f"[DDG Session {session_num}]    ⚡ Energy: {old_energy} → 100 (SUCCESS)")
                             except Exception as e:
                                 print(f"[DDG Session {session_num}]    ⚠️  Could not update agent status: {e}")
                             
@@ -1246,6 +1673,7 @@ Respond in a concise 2-3 sentence summary. If the page is relevant to "{search_t
                             discovered_pages.append(discovery_info)
                             
                             print(f"[DDG Session {session_num}]    ✨ DISCOVERY #{discoveries_count} LOGGED!")
+                            print(f"[DDG Session {session_num}]    🔑 Keywords: {keywords}")
                             print(f"[DDG Session {session_num}]    🔗 {current_url}")
                             print(f"[DDG Session {session_num}]    📝 {page_info[:80]}...")
                             print(f"[DDG Session {session_num}]    📸 Screenshot: {screenshot_url}")
@@ -1263,15 +1691,34 @@ Respond in a concise 2-3 sentence summary. If the page is relevant to "{search_t
             print(f"\n[DDG Session {session_num}] 🎉 Analysis complete!")
             print(f"[DDG Session {session_num}] 📊 Discoveries logged: {discoveries_count}/10\n")
             
+            # SWARM INTELLIGENCE: If no discoveries, deduct energy
+            if discoveries_count == 0:
+                old_energy = self.agent_energy.get(session_num, 100)
+                new_energy = max(0, old_energy - 30)
+                self.agent_energy[session_num] = new_energy
+                print(f"[DDG Session {session_num}] ⚡ Energy deducted: {old_energy} → {new_energy} (NO DISCOVERIES)")
+                
+                # LOG: Energy loss
+                self.log(session_num, f"Energy: {old_energy} → {new_energy} (-30)", "energy_loss", {
+                    "old": old_energy,
+                    "new": new_energy,
+                    "reason": "no_discoveries"
+                })
+                
+                status = "weak" if new_energy <= 0 else "idle"
+            else:
+                status = "idle"
+            
             # Update agent status to idle
             try:
                 self.convex_client.mutation(
                     "agents:updateAgentState",
                     {
                         "agent_id": session_num,
-                        "status": "idle",
+                        "status": status,
                         "current_url": "Analysis complete",
                         "profile_id": "none",
+                        "energy": self.agent_energy.get(session_num, 100),
                     }
                 )
             except Exception as e:
@@ -1283,6 +1730,21 @@ Respond in a concise 2-3 sentence summary. If the page is relevant to "{search_t
             print(f"[DDG Session {session_num}] ❌ Error in DuckDuckGo session: {e}")
             import traceback
             traceback.print_exc()
+            
+            # SWARM INTELLIGENCE: Error = deduct energy
+            old_energy = self.agent_energy.get(session_num, 100)
+            new_energy = max(0, old_energy - 30)
+            self.agent_energy[session_num] = new_energy
+            print(f"[DDG Session {session_num}] ⚡ Energy deducted: {old_energy} → {new_energy} (ERROR)")
+            
+            # LOG: Error and energy loss
+            self.log(session_num, f"Error: {str(e)[:50]}", "error", {"error": str(e)})
+            self.log(session_num, f"Energy: {old_energy} → {new_energy} (-30)", "energy_loss", {
+                "old": old_energy,
+                "new": new_energy,
+                "reason": "error"
+            })
+            
             return {"discoveries": 0, "pages": []}
     
     

@@ -6,12 +6,14 @@ export const logDiscovery = mutation({
     video_url: v.string(),
     thumbnail: v.string(),
     found_by_agent_id: v.number(),
+    keywords: v.optional(v.string()),  // 2-3 defining keywords
   },
   handler: async (ctx, args) => {
     const discoveryId = await ctx.db.insert("discoveries", {
       video_url: args.video_url,
       thumbnail: args.thumbnail,
       found_by_agent_id: args.found_by_agent_id,
+      keywords: args.keywords,
     });
     return discoveryId;
   },
@@ -32,5 +34,14 @@ export const deleteAllDiscoveries = mutation({
       await ctx.db.delete(discovery._id);
     }
     return { deleted: discoveries.length };
+  },
+});
+
+// Get the most recent discovery (for Blackboard Architecture)
+export const getLatestDiscovery = query({
+  args: {},
+  handler: async (ctx) => {
+    const discoveries = await ctx.db.query("discoveries").order("desc").take(1);
+    return discoveries[0] ?? null;
   },
 });

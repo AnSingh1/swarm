@@ -9,7 +9,9 @@
  */
 
 import type * as agents from "../agents.js";
+import type * as control from "../control.js";
 import type * as discoveries from "../discoveries.js";
+import type * as logs from "../logs.js";
 import type * as missions from "../missions.js";
 
 import type {
@@ -20,7 +22,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agents: typeof agents;
+  control: typeof control;
   discoveries: typeof discoveries;
+  logs: typeof logs;
   missions: typeof missions;
 }>;
 

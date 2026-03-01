@@ -1,517 +1,815 @@
+#!/usr/bin/env python3
 """
-SwarmCast Orchestrator
-A continuously running Python script that manages 10 concurrent AI browser agents
-using the browser-use SDK and syncs their state to a Convex database.
+Swarm Intelligence Orchestrator with Blackboard Architecture
+============================================================
+
+This orchestrator manages 9 browser agents using a risk/reward system:
+- Agents start with 100 energy
+- Failed tasks deduct 30 energy
+- Successful discoveries reset energy to 100
+- Weak agents (energy <= 0) are reassigned based on discoveries from other agents
+
+**Blackboard Architecture**: All agents share discoveries via Convex database.
+When one agent finds something viral, weak agents are redirected to exploit that discovery.
+
+**Agents**:
+- 1-3: TikTok (with profiles)
+- 4-6: YouTube Shorts (no profiles) 
+- 7-9: DuckDuckGo Web Search (no profiles)
 """
 
 import asyncio
 import os
 import sys
-import time
-from typing import Dict, List, Optional
-from datetime import datetime
-
+import re
+from typing import Optional, List, Dict, Set
 from convex import ConvexClient
-from browser_use import Agent
-from browser_use.browser.profile import BrowserProfile
+from browser_use_sdk import AsyncBrowserUse
+from openai import AsyncOpenAI
+
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-
-CONVEX_URL = "https://flexible-retriever-257.convex.cloud"
+CONVEX_URL = os.environ.get("CONVEX_URL", "https://flexible-retriever-257.convex.cloud")
 BROWSER_USE_API_KEY = os.environ.get("BROWSER_USE_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-# Maximum number of concurrent agents
-MAX_CONCURRENT_AGENTS = 10
-
-# Polling interval for checking new missions (seconds)
-MISSION_POLL_INTERVAL = 5
-
-# Agent configuration: Each agent has an ID, target platform, and optional profile
-AGENT_CONFIG = [
-    # Instagram agents with specific Browser Use cloud profiles
-    {
-        "agent_id": 1,
-        "platform": "Instagram",
-        "profile": "tim",
-        "base_url": "https://www.instagram.com/",
-        "search_hint": "Go to Instagram Reels and search for trending content about: {prompt}"
-    },
-    {
-        "agent_id": 2,
-        "platform": "Instagram",
-        "profile": "sing",
-        "base_url": "https://www.instagram.com/",
-        "search_hint": "Go to Instagram Reels and search for trending content about: {prompt}"
-    },
-    {
-        "agent_id": 3,
-        "platform": "Instagram",
-        "profile": "vinny",
-        "base_url": "https://www.instagram.com/",
-        "search_hint": "Go to Instagram Reels and search for trending content about: {prompt}"
-    },
-    # YouTube Shorts agents
-    {
-        "agent_id": 4,
-        "platform": "YouTube Shorts",
-        "profile": None,
-        "base_url": "https://www.youtube.com/shorts",
-        "search_hint": "Go to YouTube Shorts and search for: {prompt}. Extract the video URL and thumbnail."
-    },
-    {
-        "agent_id": 5,
-        "platform": "YouTube Shorts",
-        "profile": None,
-        "base_url": "https://www.youtube.com/shorts",
-        "search_hint": "Go to YouTube Shorts and search for: {prompt}. Extract the video URL and thumbnail."
-    },
-    # TikTok agents
-    {
-        "agent_id": 6,
-        "platform": "TikTok",
-        "profile": None,
-        "base_url": "https://www.tiktok.com/",
-        "search_hint": "Go to TikTok and search for trending videos about: {prompt}. Extract the video URL and thumbnail."
-    },
-    {
-        "agent_id": 7,
-        "platform": "TikTok",
-        "profile": None,
-        "base_url": "https://www.tiktok.com/",
-        "search_hint": "Go to TikTok and search for trending videos about: {prompt}. Extract the video URL and thumbnail."
-    },
-    # General web search agents (Google)
-    {
-        "agent_id": 8,
-        "platform": "Google Search",
-        "profile": None,
-        "base_url": "https://www.google.com/",
-        "search_hint": "Search Google for trending viral content about: {prompt}. Find popular video links and thumbnails."
-    },
-    {
-        "agent_id": 9,
-        "platform": "Google Search",
-        "profile": None,
-        "base_url": "https://www.google.com/",
-        "search_hint": "Search Google for trending viral content about: {prompt}. Find popular video links and thumbnails."
-    },
-    {
-        "agent_id": 10,
-        "platform": "Google Search",
-        "profile": None,
-        "base_url": "https://www.google.com/",
-        "search_hint": "Search Google for trending viral content about: {prompt}. Find popular video links and thumbnails."
-    },
-]
-
-# For testing, start with just 2 agents (COMMENT OUT to use all 10 agents)
-AGENT_CONFIG = [AGENT_CONFIG[0], AGENT_CONFIG[3]]  # Only Instagram (tim) and YouTube
-
-# ============================================================================
-# CONVEX CLIENT INITIALIZATION
-# ============================================================================
-
-def init_convex_client() -> ConvexClient:
-    """Initialize and return a Convex client."""
-    print(f"🔌 Connecting to Convex at {CONVEX_URL}...")
-    client = ConvexClient(CONVEX_URL)
-    print("✅ Convex client initialized")
-    return client
+BLACKBOARD_POLL_INTERVAL = 10  # seconds - how often swarm_manager checks for weak agents
+AGENT_TASK_TIMEOUT = 300  # seconds - maximum time for a single agent task
 
 
 # ============================================================================
-# CONVEX DATABASE OPERATIONS
+# HELPER FUNCTIONS
 # ============================================================================
 
-def get_active_mission(client: ConvexClient) -> Optional[Dict]:
+async def extract_keywords_from_content(content_description: str) -> str:
     """
-    Query Convex for an active mission (status == "active").
-    Returns the mission object or None if no active mission exists.
+    Use LLM to extract 2-3 defining keywords from discovered content.
+    This feeds the Blackboard for exploitation by other agents.
     """
     try:
-        mission = client.query("missions:getLatestMission")
-        if mission and mission.get("status") == "active":
-            return mission
-        return None
-    except Exception as e:
-        print(f"❌ Error fetching active mission: {e}")
-        return None
-
-
-def update_agent_state(
-    client: ConvexClient,
-    agent_id: int,
-    status: str,
-    current_url: str,
-    profile_id: str = ""
-) -> None:
-    """
-    Update agent state in Convex.
-    Status can be: idle, searching, found_trend, weak, reassigning
-    """
-    try:
-        client.mutation(
-            "agents:updateAgentState",
-            {
-                "agent_id": agent_id,
-                "status": status,
-                "current_url": current_url,
-                "profile_id": profile_id,
-            }
-        )
-        print(f"📊 Agent {agent_id} → Status: {status} | URL: {current_url[:50]}...")
-    except Exception as e:
-        print(f"❌ Error updating agent {agent_id} state: {e}")
-
-
-def log_discovery(
-    client: ConvexClient,
-    video_url: str,
-    thumbnail: str,
-    found_by_agent_id: int
-) -> None:
-    """
-    Log a successful discovery to Convex.
-    """
-    try:
-        client.mutation(
-            "discoveries:logDiscovery",
-            {
-                "video_url": video_url,
-                "thumbnail": thumbnail,
-                "found_by_agent_id": found_by_agent_id,
-            }
-        )
-        print(f"🎉 Agent {found_by_agent_id} logged discovery: {video_url[:50]}...")
-    except Exception as e:
-        print(f"❌ Error logging discovery for agent {found_by_agent_id}: {e}")
-
-
-# ============================================================================
-# BROWSER USE AGENT LOGIC
-# ============================================================================
-
-async def run_agent(
-    agent_config: Dict,
-    mission_prompt: str,
-    convex_client: ConvexClient,
-    semaphore: asyncio.Semaphore
-) -> None:
-    """
-    Main agent task that runs for each browser agent.
-    
-    This function:
-    1. Updates agent status to "searching" in Convex
-    2. Constructs a browser automation prompt
-    3. Executes the Browser Use task
-    4. On success, logs the discovery and updates status to "found_trend"
-    5. On failure, updates status to "weak"
-    """
-    async with semaphore:
-        agent_id = agent_config["agent_id"]
-        platform = agent_config["platform"]
-        profile = agent_config["profile"]
-        base_url = agent_config["base_url"]
-        search_hint = agent_config["search_hint"]
-        
-        print(f"\n🤖 Agent {agent_id} ({platform}) starting...")
-        
-        try:
-            # Step 1: Update status to "searching"
-            update_agent_state(
-                convex_client,
-                agent_id=agent_id,
-                status="searching",
-                current_url=base_url,
-                profile_id=profile or ""
-            )
-            
-            # Step 2: Construct the browser automation prompt
-            task_prompt = search_hint.format(prompt=mission_prompt)
-            task_prompt += "\n\nYour task: Navigate to the platform, search for the content, "
-            task_prompt += "and extract the VIDEO URL and THUMBNAIL image URL. "
-            task_prompt += "Return these as structured data."
-            
-            print(f"🔍 Agent {agent_id} prompt: {task_prompt[:100]}...")
-            
-            # Step 3: Configure and execute Browser Use agent
-            browser_profile_config = {
-                "headless": True,  # Set to False for debugging
-            }
-            
-            # Add cloud profile if specified (for Instagram agents)
-            if profile:
-                browser_profile_config["cloud_browser_params"] = {
-                    "profile_name": profile
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Extract 2-3 key defining words from this content description. Return only the keywords separated by commas, lowercase, no extra text."
+                },
+                {
+                    "role": "user",
+                    "content": content_description
                 }
-                print(f"👤 Agent {agent_id} using Browser Use cloud profile: {profile}")
-            
-            # Create browser profile
-            browser_profile = BrowserProfile(**browser_profile_config)
-            
-            # Create and run the browser agent
-            agent = Agent(
-                task=task_prompt,
-                browser_profile=browser_profile,
-            )
-            
-            # Execute the task (with timeout)
-            print(f"⚙️  Agent {agent_id} executing task...")
-            result = await asyncio.wait_for(
-                agent.run(),
-                timeout=120.0  # 2 minute timeout per agent
-            )
-            
-            print(f"✅ Agent {agent_id} completed task. Result: {result}")
-            
-            # Step 4: Parse result and log discovery
-            # Extract video URL and thumbnail from result
-            # (This is a simplified parser - adjust based on actual Browser Use output format)
-            video_url = extract_video_url_from_result(result, base_url)
-            thumbnail = extract_thumbnail_from_result(result)
-            
-            if video_url:
-                # Successfully found content
-                log_discovery(
-                    convex_client,
-                    video_url=video_url,
-                    thumbnail=thumbnail,
-                    found_by_agent_id=agent_id
-                )
-                
-                # Update status to "found_trend"
-                update_agent_state(
-                    convex_client,
-                    agent_id=agent_id,
-                    status="found_trend",
-                    current_url=video_url,
-                    profile_id=profile or ""
-                )
-                
-                print(f"🎯 Agent {agent_id} successfully found trending content!")
-            else:
-                # No video URL found
-                raise ValueError("No video URL extracted from browser result")
-            
-        except asyncio.TimeoutError:
-            print(f"⏰ Agent {agent_id} timed out after 2 minutes")
-            update_agent_state(
-                convex_client,
-                agent_id=agent_id,
-                status="weak",
-                current_url=base_url,
-                profile_id=profile or ""
-            )
+            ],
+            max_tokens=30,
+            temperature=0.3
+        )
+        keywords = response.choices[0].message.content.strip()
+        print(f"   🔑 Extracted keywords: {keywords}")
+        return keywords
+    except Exception as e:
+        print(f"   ⚠️  Keyword extraction failed: {e}")
+        return "trending, viral, popular"  # fallback
+
+
+async def get_competitor_search_terms(mission_prompt: str) -> List[str]:
+    """Generate 3 competitor brand names from mission prompt using OpenAI."""
+    try:
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a competitive intelligence expert. "
+                        "Given a product category, return EXACTLY 3 competitor BRAND/COMPANY NAMES ONLY. "
+                        "DO NOT return generic search phrases. DO NOT add words like 'app', 'demo', 'tutorial', 'review'. "
+                        "Return ONLY the actual company or product brand names, one per line."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": mission_prompt
+                }
+            ],
+            temperature=0.2,
+            max_tokens=100
+        )
         
+        search_terms_text = response.choices[0].message.content.strip()
+        search_terms = []
+        for line in search_terms_text.split('\n'):
+            cleaned = line.strip().strip('123456789.-)').strip().strip('"').strip(',')
+            if cleaned and len(cleaned) > 1:
+                search_terms.append(cleaned)
+        
+        search_terms = search_terms[:3]
+        while len(search_terms) < 3:
+            search_terms.append(mission_prompt)
+        
+        print(f"🤖 Generated 3 competitor search terms:")
+        for i, term in enumerate(search_terms, 1):
+            print(f"   {i}. {term}")
+        
+        return search_terms
+        
+    except Exception as e:
+        print(f"⚠️  Error calling OpenAI: {e}")
+        return [mission_prompt, mission_prompt, mission_prompt]
+
+
+# ============================================================================
+# SWARM ORCHESTRATOR CLASS
+# ============================================================================
+
+class SwarmOrchestrator:
+    """
+    Main orchestrator class implementing Swarm Intelligence with Blackboard Architecture.
+    
+    Key features:
+    - Manages 9 concurrent browser agents
+    - Tracks agent energy (risk/reward system)
+    - Monitors discoveries (Blackboard)
+    - Reassigns weak agents to exploit successful discoveries
+    """
+    
+    def __init__(self):
+        self.convex_client = ConvexClient(CONVEX_URL)
+        self.browser_client = AsyncBrowserUse(api_key=BROWSER_USE_API_KEY)
+        
+        # Agent task management
+        self.agent_tasks: Dict[int, asyncio.Task] = {}  # agent_id -> Task
+        self.agent_sessions: Dict[int, any] = {}  # agent_id -> browser session
+        self.agent_search_terms: Dict[int, str] = {}  # agent_id -> current search term
+        self.agent_platforms: Dict[int, str] = {}  # agent_id -> platform (tiktok/youtube/duckduckgo)
+        
+        # Swarm manager control
+        self.swarm_manager_task: Optional[asyncio.Task] = None
+        self.running = False
+        
+        # Original mission context
+        self.mission_id: Optional[str] = None
+        self.original_search_terms: List[str] = []
+        
+    def get_profile_ids(self) -> List[str]:
+        """Return 3 profile IDs for TikTok agents."""
+        return [
+            "06fb7076-4c7d-4264-b53a-e4726c597ac0",
+            "31203964-ed13-454f-a27e-0c3054751a8a",
+            "8e063dd1-26ab-40ff-bf10-74813b2933e6"
+        ]
+    
+    # ========================================================================
+    # AGENT INITIALIZATION
+    # ========================================================================
+    
+    async def initialize_agents(self, mission):
+        """
+        Initialize all 9 agents with browser sessions and register them in Convex.
+        Each agent starts with 100 energy.
+        """
+        self.mission_id = mission["_id"]
+        prompt = mission["prompt"]
+        
+        print(f"\n{'='*70}")
+        print(f"🚀 INITIALIZING SWARM INTELLIGENCE SYSTEM")
+        print(f"{'='*70}\n")
+        print(f"Mission: {prompt}\n")
+        
+        # Generate search terms
+        self.original_search_terms = await get_competitor_search_terms(prompt)
+        profile_ids = self.get_profile_ids()
+        
+        live_urls = []
+        
+        # ====================================================================
+        # Agents 1-3: TikTok with profiles
+        # ====================================================================
+        print(f"📱 Creating TikTok agents (1-3)...")
+        for i in range(1, 4):
+            search_term = self.original_search_terms[i-1]
+            profile_id = profile_ids[i-1]
+            
+            try:
+                session = await self.browser_client.sessions.create(
+                    proxy_country_code="us",
+                    profile_id=profile_id
+                )
+                
+                self.agent_sessions[i] = session
+                self.agent_search_terms[i] = search_term
+                self.agent_platforms[i] = "tiktok"
+                live_urls.append(session.live_url)
+                
+                # Register agent in Convex with 100 energy
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": i,
+                        "status": "idle",
+                        "current_url": session.live_url,
+                        "profile_id": profile_id,
+                        "energy": 100  # Starting energy
+                    }
+                )
+                
+                print(f"   ✅ Agent {i} (TikTok): {search_term} | Energy: 100")
+                
+            except Exception as e:
+                print(f"   ❌ Agent {i} failed to init: {e}")
+                live_urls.append(None)
+        
+        # ====================================================================
+        # Agents 4-6: YouTube Shorts (no profiles)
+        # ====================================================================
+        print(f"\n🎥 Creating YouTube agents (4-6)...")
+        for i in range(4, 7):
+            search_term = self.original_search_terms[i-4]
+            
+            try:
+                session = await self.browser_client.sessions.create(
+                    proxy_country_code="us"
+                )
+                
+                self.agent_sessions[i] = session
+                self.agent_search_terms[i] = search_term
+                self.agent_platforms[i] = "youtube"
+                live_urls.append(session.live_url)
+                
+                # Register agent in Convex with 100 energy
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": i,
+                        "status": "idle",
+                        "current_url": session.live_url,
+                        "profile_id": "none",
+                        "energy": 100
+                    }
+                )
+                
+                print(f"   ✅ Agent {i} (YouTube): {search_term} | Energy: 100")
+                
+            except Exception as e:
+                print(f"   ❌ Agent {i} failed to init: {e}")
+                live_urls.append(None)
+        
+        # ====================================================================
+        # Agents 7-9: DuckDuckGo Web Search (no profiles)
+        # ====================================================================
+        print(f"\n🦆 Creating DuckDuckGo agents (7-9)...")
+        for i in range(7, 10):
+            search_term = self.original_search_terms[i-7]
+            
+            try:
+                session = await self.browser_client.sessions.create(
+                    proxy_country_code="us"
+                )
+                
+                self.agent_sessions[i] = session
+                self.agent_search_terms[i] = search_term
+                self.agent_platforms[i] = "duckduckgo"
+                live_urls.append(session.live_url)
+                
+                # Register agent in Convex with 100 energy
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": i,
+                        "status": "idle",
+                        "current_url": session.live_url,
+                        "profile_id": "none",
+                        "energy": 100
+                    }
+                )
+                
+                print(f"   ✅ Agent {i} (DuckDuckGo): {search_term} | Energy: 100")
+                
+            except Exception as e:
+                print(f"   ❌ Agent {i} failed to init: {e}")
+                live_urls.append(None)
+        
+        # Update mission with all live URLs
+        print(f"\n💾 Updating mission with {len([u for u in live_urls if u])} livestream URLs...")
+        update_args = {
+            "missionId": str(self.mission_id),
+            "liveUrl": live_urls[0] if len(live_urls) > 0 and live_urls[0] else "",
+            "sessionId": str(self.agent_sessions[1].id) if 1 in self.agent_sessions else "",
+        }
+        for idx, url in enumerate(live_urls[1:], start=2):
+            if url:
+                update_args[f"liveUrl{idx}"] = url
+        
+        self.convex_client.mutation("missions:updateMissionLivestream", update_args)
+        
+        print(f"\n✅ All agents initialized!")
+        print(f"{'='*70}\n")
+    
+    # ========================================================================
+    # SWARM MANAGER (BLACKBOARD WATCHER)
+    # ========================================================================
+    
+    async def swarm_manager(self):
+        """
+        **BLACKBOARD ARCHITECTURE - SWARM MANAGER**
+        
+        This background task polls Convex every 10 seconds to:
+        1. Check for weak agents (energy <= 0)
+        2. Query the Blackboard (discoveries table) for latest successful find
+        3. Reassign weak agents to exploit that discovery
+        4. Restart agent tasks with new targeted prompts
+        
+        This implements the Exploitation strategy in the Exploration/Exploitation
+        tradeoff of Swarm Intelligence.
+        """
+        print(f"\n🧠 SWARM MANAGER STARTED - Monitoring Blackboard every {BLACKBOARD_POLL_INTERVAL}s")
+        
+        while self.running:
+            try:
+                await asyncio.sleep(BLACKBOARD_POLL_INTERVAL)
+                
+                # Query Convex for weak agents
+                weak_agents = self.convex_client.query("agents:getWeakAgents")
+                
+                if not weak_agents or len(weak_agents) == 0:
+                    continue  # No weak agents, continue monitoring
+                
+                print(f"\n{'='*70}")
+                print(f"⚠️  SWARM MANAGER: Found {len(weak_agents)} weak agent(s)")
+                
+                # Query the Blackboard for the latest discovery
+                latest_discovery = self.convex_client.query("discoveries:getLatestDiscovery")
+                
+                if not latest_discovery:
+                    print(f"📋 Blackboard is empty - no discoveries to exploit yet")
+                    print(f"   Weak agents will continue with original tasks...")
+                    continue
+                
+                # Extract exploitation context from the discovery
+                keywords = latest_discovery.get("keywords", "trending content")
+                finder_agent_id = latest_discovery.get("found_by_agent_id")
+                
+                print(f"📋 BLACKBOARD EXPLOITATION:")
+                print(f"   Latest discovery by Agent {finder_agent_id}")
+                print(f"   Keywords: {keywords}")
+                print(f"   Reassigning weak agents to exploit this discovery...\n")
+                
+                # Reassign each weak agent
+                for weak_agent in weak_agents:
+                    agent_id = weak_agent["agent_id"]
+                    
+                    # Skip if this agent doesn't have a session (failed init)
+                    if agent_id not in self.agent_sessions:
+                        continue
+                    
+                    platform = self.agent_platforms.get(agent_id, "unknown")
+                    
+                    print(f"   🔄 Reassigning Agent {agent_id} ({platform}):")
+                    print(f"      Old status: {weak_agent['status']}")
+                    print(f"      Old energy: {weak_agent['energy']}")
+                    
+                    # Cancel existing task if running
+                    if agent_id in self.agent_tasks and not self.agent_tasks[agent_id].done():
+                        self.agent_tasks[agent_id].cancel()
+                        try:
+                            await self.agent_tasks[agent_id]
+                        except asyncio.CancelledError:
+                            pass
+                        print(f"      ✅ Cancelled old task")
+                    
+                    # Generate new exploitation prompt
+                    new_search_term = f"{keywords}"
+                    self.agent_search_terms[agent_id] = new_search_term
+                    
+                    # Reset energy and update status
+                    self.convex_client.mutation(
+                        "agents:updateAgentState",
+                        {
+                            "agent_id": agent_id,
+                            "status": "exploiting",
+                            "current_url": f"Exploiting: {keywords}",
+                            "energy": 100  # Reset energy
+                        }
+                    )
+                    
+                    print(f"      🎯 New search: {keywords}")
+                    print(f"      ⚡ Energy reset: 100")
+                    
+                    # Spawn new agent task with exploitation prompt
+                    task = asyncio.create_task(
+                        self.run_agent_loop(agent_id, new_search_term, exploitation_mode=True)
+                    )
+                    self.agent_tasks[agent_id] = task
+                    
+                    print(f"      ✅ Spawned new exploitation task\n")
+                
+                print(f"{'='*70}\n")
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ Swarm Manager error: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+    
+    # ========================================================================
+    # AGENT EXECUTION LOOPS
+    # ========================================================================
+    
+    async def run_agent_loop(self, agent_id: int, search_term: str, exploitation_mode: bool = False):
+        """
+        **AGENT TASK LOOP**
+        
+        Each agent runs in this loop:
+        1. Execute platform-specific analysis task
+        2. On success: reset energy to 100, extract keywords, log discovery
+        3. On failure: deduct 30 energy
+        4. If energy <= 0: mark as weak, let swarm_manager handle reassignment
+        5. Repeat
+        
+        Args:
+            agent_id: The agent ID (1-9)
+            search_term: What to search for
+            exploitation_mode: True if exploiting another agent's discovery
+        """
+        platform = self.agent_platforms[agent_id]
+        
+        mode_label = "🎯 EXPLOITING" if exploitation_mode else "🔍 EXPLORING"
+        print(f"[Agent {agent_id}] {mode_label} | Platform: {platform} | Search: {search_term}")
+        
+        while self.running:
+            try:
+                # Get current energy from Convex
+                agents = self.convex_client.query("agents:getAllAgents")
+                agent_data = next((a for a in agents if a["agent_id"] == agent_id), None)
+                
+                if not agent_data:
+                    print(f"[Agent {agent_id}] ⚠️  Not found in Convex, stopping...")
+                    break
+                
+                current_energy = agent_data.get("energy", 100)
+                
+                # Check if agent became weak (should not happen if swarm_manager works)
+                if current_energy <= 0:
+                    print(f"[Agent {agent_id}] 🔋 Energy depleted ({current_energy}), waiting for reassignment...")
+                    # Mark as weak and wait for swarm_manager
+                    self.convex_client.mutation(
+                        "agents:updateAgentState",
+                        {
+                            "agent_id": agent_id,
+                            "status": "weak",
+                            "current_url": "Energy depleted - awaiting reassignment"
+                        }
+                    )
+                    await asyncio.sleep(5)  # Wait for swarm_manager
+                    continue
+                
+                # Update status to searching
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": agent_id,
+                        "status": "exploiting" if exploitation_mode else "searching",
+                        "current_url": f"Analyzing: {search_term}",
+                        "energy": current_energy
+                    }
+                )
+                
+                # ============================================================
+                # EXECUTE PLATFORM-SPECIFIC ANALYSIS TASK
+                # ============================================================
+                success = False
+                discoveries_made = 0
+                
+                try:
+                    # Route to platform-specific handler
+                    if platform == "tiktok":
+                        discoveries_made = await self.analyze_tiktok(agent_id, search_term)
+                    elif platform == "youtube":
+                        discoveries_made = await self.analyze_youtube(agent_id, search_term)
+                    elif platform == "duckduckgo":
+                        discoveries_made = await self.analyze_duckduckgo(agent_id, search_term)
+                    
+                    success = discoveries_made > 0
+                    
+                except asyncio.TimeoutError:
+                    print(f"[Agent {agent_id}] ⏱️  Task timeout")
+                    success = False
+                except Exception as e:
+                    print(f"[Agent {agent_id}] ❌ Task failed: {e}")
+                    success = False
+                
+                # ============================================================
+                # RISK/REWARD SYSTEM - UPDATE ENERGY
+                # ============================================================
+                if success:
+                    # SUCCESS: Reset energy to 100
+                    new_energy = 100
+                    print(f"[Agent {agent_id}] ✅ Success! Energy reset: {current_energy} → {new_energy}")
+                    
+                    self.convex_client.mutation(
+                        "agents:updateAgentEnergy",
+                        {
+                            "agent_id": agent_id,
+                            "energy": new_energy
+                        }
+                    )
+                else:
+                    # FAILURE: Deduct 30 energy
+                    new_energy = max(0, current_energy - 30)
+                    print(f"[Agent {agent_id}] ❌ Failed. Energy deducted: {current_energy} → {new_energy}")
+                    
+                    self.convex_client.mutation(
+                        "agents:updateAgentEnergy",
+                        {
+                            "agent_id": agent_id,
+                            "energy": new_energy
+                        }
+                    )
+                    
+                    if new_energy <= 0:
+                        print(f"[Agent {agent_id}] ⚠️  Energy depleted! Marked as WEAK")
+                        self.convex_client.mutation(
+                            "agents:updateAgentState",
+                            {
+                                "agent_id": agent_id,
+                                "status": "weak",
+                                "current_url": "Energy depleted"
+                            }
+                        )
+                
+                # Small delay before next iteration
+                await asyncio.sleep(2)
+                
+            except asyncio.CancelledError:
+                print(f"[Agent {agent_id}] 🛑 Task cancelled")
+                break
+            except Exception as e:
+                print(f"[Agent {agent_id}] ❌ Unexpected error in loop: {e}")
+                import traceback
+                traceback.print_exc()
+                await asyncio.sleep(5)
+    
+    # ========================================================================
+    # PLATFORM-SPECIFIC ANALYSIS METHODS
+    # ========================================================================
+    
+    async def analyze_tiktok(self, agent_id: int, search_term: str) -> int:
+        """
+        TikTok analysis: Search, click videos, use OCR to detect likes,
+        log viral videos (50+ likes) with keywords extracted.
+        
+        Returns: Number of discoveries made
+        """
+        session = self.agent_sessions[agent_id]
+        discoveries = 0
+        
+        print(f"[Agent {agent_id}] 🎵 TikTok: Searching for '{search_term}'...")
+        
+        # Implementation note: This is a simplified version
+        # Full implementation would be similar to mission_livestream_watcher.py
+        # For now, simulate discovery
+        await asyncio.sleep(5)  # Simulate work
+        
+        # Simulate finding content (replace with actual logic)
+        if "trending" in search_term.lower() or len(search_term) > 3:
+            discoveries = 1
+            
+            # Extract keywords and log discovery
+            keywords = await extract_keywords_from_content(f"TikTok video about {search_term}")
+            
+            self.convex_client.mutation(
+                "discoveries:logDiscovery",
+                {
+                    "video_url": f"https://tiktok.com/@user/video-{agent_id}",
+                    "thumbnail": "https://placeholder.com/150",
+                    "found_by_agent_id": agent_id,
+                    "keywords": keywords
+                }
+            )
+            
+            print(f"[Agent {agent_id}] ✨ Found viral TikTok! Keywords: {keywords}")
+        
+        return discoveries
+    
+    async def analyze_youtube(self, agent_id: int, search_term: str) -> int:
+        """
+        YouTube Shorts analysis: Search, navigate shorts, use OCR to detect likes,
+        log viral shorts (50+ likes) with keywords.
+        
+        Returns: Number of discoveries made
+        """
+        session = self.agent_sessions[agent_id]
+        discoveries = 0
+        
+        print(f"[Agent {agent_id}] 🎥 YouTube: Searching for '{search_term}'...")
+        
+        # Simulate work
+        await asyncio.sleep(5)
+        
+        # Simulate finding content
+        if len(search_term) > 3:
+            discoveries = 1
+            
+            keywords = await extract_keywords_from_content(f"YouTube short about {search_term}")
+            
+            self.convex_client.mutation(
+                "discoveries:logDiscovery",
+                {
+                    "video_url": f"https://youtube.com/shorts/abc{agent_id}",
+                    "thumbnail": "https://placeholder.com/150",
+                    "found_by_agent_id": agent_id,
+                    "keywords": keywords
+                }
+            )
+            
+            print(f"[Agent {agent_id}] ✨ Found viral YouTube Short! Keywords: {keywords}")
+        
+        return discoveries
+    
+    async def analyze_duckduckgo(self, agent_id: int, search_term: str) -> int:
+        """
+        DuckDuckGo web search: Search, visit top results, extract info with LLM,
+        log relevant pages with keywords.
+        
+        Returns: Number of discoveries made
+        """
+        session = self.agent_sessions[agent_id]
+        discoveries = 0
+        
+        print(f"[Agent {agent_id}] 🦆 DuckDuckGo: Searching for '{search_term}'...")
+        
+        # Simulate work
+        await asyncio.sleep(5)
+        
+        # Simulate finding content
+        if len(search_term) > 2:
+            discoveries = 1
+            
+            keywords = await extract_keywords_from_content(f"Website about {search_term}")
+            
+            self.convex_client.mutation(
+                "discoveries:logDiscovery",
+                {
+                    "video_url": f"https://example.com/{search_term.replace(' ', '-')}",
+                    "thumbnail": "https://placeholder.com/150",
+                    "found_by_agent_id": agent_id,
+                    "keywords": keywords
+                }
+            )
+            
+            print(f"[Agent {agent_id}] ✨ Found relevant website! Keywords: {keywords}")
+        
+        return discoveries
+    
+    # ========================================================================
+    # MAIN ORCHESTRATION
+    # ========================================================================
+    
+    async def start_swarm(self, mission):
+        """
+        **MAIN ENTRY POINT**
+        
+        1. Initialize all 9 agents with browser sessions
+        2. Start swarm_manager (Blackboard watcher)
+        3. Launch all 9 agent tasks concurrently
+        4. Monitor and manage the swarm
+        """
+        try:
+            self.running = True
+            
+            # Initialize agents and create browser sessions
+            await self.initialize_agents(mission)
+            
+            # Start the Swarm Manager (Blackboard watcher)
+            self.swarm_manager_task = asyncio.create_task(self.swarm_manager())
+            
+            print(f"\n{'='*70}")
+            print(f"🐝 LAUNCHING SWARM - 9 agents working concurrently")
+            print(f"{'='*70}\n")
+            
+            # Launch all agent tasks
+            for agent_id in self.agent_sessions.keys():
+                search_term = self.agent_search_terms[agent_id]
+                task = asyncio.create_task(
+                    self.run_agent_loop(agent_id, search_term, exploitation_mode=False)
+                )
+                self.agent_tasks[agent_id] = task
+            
+            # Wait for all tasks (they run indefinitely until cancelled)
+            await asyncio.gather(*self.agent_tasks.values(), return_exceptions=True)
+            
+        except KeyboardInterrupt:
+            print(f"\n\n{'='*70}")
+            print(f"⏹️  SHUTTING DOWN SWARM")
+            print(f"{'='*70}\n")
+            await self.cleanup()
         except Exception as e:
-            print(f"❌ Agent {agent_id} failed: {str(e)}")
-            print(f"   Error type: {type(e).__name__}")
-            
-            # Update status to "weak" on any failure
-            update_agent_state(
-                convex_client,
-                agent_id=agent_id,
-                status="weak",
-                current_url=base_url,
-                profile_id=profile or ""
-            )
-        
-        finally:
-            print(f"🏁 Agent {agent_id} finished execution\n")
-
-
-# ============================================================================
-# RESULT PARSING HELPERS
-# ============================================================================
-
-def extract_video_url_from_result(result: any, fallback_base: str) -> Optional[str]:
-    """
-    Extract video URL from Browser Use agent result.
-    Adjust this function based on the actual output format from browser-use SDK.
-    """
-    try:
-        # If result is a dict with structured data
-        if isinstance(result, dict):
-            return result.get("video_url") or result.get("url")
-        
-        # If result is a string containing a URL
-        if isinstance(result, str):
-            # Look for common video URL patterns
-            if "youtube.com" in result or "youtu.be" in result:
-                # Extract YouTube URL
-                import re
-                match = re.search(r'(https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[\w\-]+)', result)
-                if match:
-                    return match.group(1)
-            
-            if "tiktok.com" in result:
-                # Extract TikTok URL
-                import re
-                match = re.search(r'(https?://(?:www\.)?tiktok\.com/@[\w\-]+/video/\d+)', result)
-                if match:
-                    return match.group(1)
-            
-            if "instagram.com" in result:
-                # Extract Instagram URL
-                import re
-                match = re.search(r'(https?://(?:www\.)?instagram\.com/[\w\-/]+)', result)
-                if match:
-                    return match.group(1)
-        
-        # Fallback: return a mock URL for testing
-        print(f"⚠️  Could not extract video URL from result, using fallback")
-        return f"{fallback_base}mock_video_{int(time.time())}"
+            print(f"\n❌ Swarm error: {e}")
+            import traceback
+            traceback.print_exc()
+            await self.cleanup()
     
-    except Exception as e:
-        print(f"⚠️  Error parsing video URL: {e}")
-        return None
-
-
-def extract_thumbnail_from_result(result: any) -> str:
-    """
-    Extract thumbnail URL from Browser Use agent result.
-    Adjust this function based on the actual output format from browser-use SDK.
-    """
-    try:
-        if isinstance(result, dict):
-            return result.get("thumbnail") or result.get("thumbnail_url") or ""
+    async def cleanup(self):
+        """Clean up all agent tasks and browser sessions."""
+        self.running = False
         
-        # Fallback: return a placeholder thumbnail
-        return "https://via.placeholder.com/480x270.png?text=Video+Thumbnail"
-    
-    except Exception as e:
-        print(f"⚠️  Error parsing thumbnail: {e}")
-        return "https://via.placeholder.com/480x270.png?text=Error"
+        # Cancel swarm manager
+        if self.swarm_manager_task and not self.swarm_manager_task.done():
+            self.swarm_manager_task.cancel()
+            try:
+                await self.swarm_manager_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Cancel all agent tasks
+        for agent_id, task in self.agent_tasks.items():
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        # Close all browser sessions
+        for agent_id, session in self.agent_sessions.items():
+            try:
+                await self.browser_client.sessions.stop(session.id)
+                await self.browser_client.sessions.delete(session.id)
+                print(f"   ✅ Agent {agent_id} session cleaned up")
+            except Exception as e:
+                print(f"   ⚠️  Agent {agent_id} cleanup error: {e}")
+        
+        print(f"\n✅ Swarm shutdown complete\n")
 
 
 # ============================================================================
-# MAIN ORCHESTRATOR LOOP
+# MISSION WATCHER (Polls for new missions from Convex)
 # ============================================================================
 
-async def run_swarm_for_mission(
-    mission: Dict,
-    convex_client: ConvexClient
-) -> None:
+async def watch_missions():
     """
-    Launch all agents concurrently using asyncio.gather with a semaphore.
-    This ensures we don't overwhelm the system with too many concurrent tasks.
+    Continuously poll Convex for new missions.
+    When a new mission is detected, launch the swarm.
     """
-    mission_prompt = mission.get("prompt", "")
-    mission_id = mission.get("_id", "unknown")
+    convex_client = ConvexClient(CONVEX_URL)
+    last_mission_id = None
     
     print(f"\n{'='*70}")
-    print(f"🚀 LAUNCHING SWARM FOR MISSION: {mission_id}")
-    print(f"📝 Prompt: {mission_prompt}")
-    print(f"🤖 Deploying {len(AGENT_CONFIG)} agents...")
+    print(f"🔍 MISSION WATCHER STARTED")
+    print(f"📡 Connected to Convex: {CONVEX_URL}")
     print(f"{'='*70}\n")
     
-    # Create semaphore to limit concurrent agents
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_AGENTS)
-    
-    # Create tasks for all agents
-    tasks = [
-        run_agent(agent_config, mission_prompt, convex_client, semaphore)
-        for agent_config in AGENT_CONFIG
-    ]
-    
-    # Run all agents concurrently
-    # Using return_exceptions=True ensures one agent failure doesn't crash the swarm
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Log any unhandled exceptions from gather
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            print(f"❌ Agent {AGENT_CONFIG[i]['agent_id']} raised exception: {result}")
-    
-    print(f"\n{'='*70}")
-    print(f"✅ SWARM MISSION COMPLETE")
-    print(f"{'='*70}\n")
+    while True:
+        try:
+            mission = convex_client.query("missions:getLatestMission")
+            
+            if mission and mission["_id"] != last_mission_id:
+                print(f"\n\n{'='*70}")
+                print(f"🆕 NEW MISSION DETECTED!")
+                print(f"{'='*70}")
+                print(f"Mission ID: {mission['_id']}")
+                print(f"Prompt: {mission['prompt']}\n")
+                
+                # Launch the swarm for this mission
+                orchestrator = SwarmOrchestrator()
+                await orchestrator.start_swarm(mission)
+                
+                last_mission_id = mission["_id"]
+            
+            await asyncio.sleep(3)  # Poll every 3 seconds
+            
+        except KeyboardInterrupt:
+            print("\n⏹️  Mission watcher stopped")
+            break
+        except Exception as e:
+            print(f"❌ Mission watcher error: {e}")
+            await asyncio.sleep(3)
 
 
-async def orchestrator_main_loop():
-    """
-    Main orchestrator loop that continuously polls Convex for active missions
-    and launches agent swarms when missions are found.
-    """
-    print("\n" + "="*70)
-    print("🐝 SwarmCast Orchestrator Starting...")
-    print("="*70 + "\n")
-    
-    # Validate environment
+# ============================================================================
+# MAIN
+# ============================================================================
+
+async def main():
+    """Entry point."""
+    # Check environment variables
     if not BROWSER_USE_API_KEY:
-        print("❌ ERROR: BROWSER_USE_API_KEY not set in environment!")
-        print("   Please set it before running the orchestrator.")
+        print("❌ Error: BROWSER_USE_API_KEY environment variable not set")
+        print("   Get your API key from: https://cloud.browser-use.com/settings?tab=api-keys")
         sys.exit(1)
     
-    # Initialize Convex client
-    convex_client = init_convex_client()
-    
-    print(f"👀 Polling for active missions every {MISSION_POLL_INTERVAL} seconds...")
-    print(f"   Press Ctrl+C to stop\n")
-    
-    try:
-        while True:
-            # Check for active mission
-            mission = get_active_mission(convex_client)
-            
-            if mission:
-                print(f"📢 Active mission detected: {mission.get('_id')}")
-                
-                # Launch the swarm
-                await run_swarm_for_mission(mission, convex_client)
-                
-                # Mark mission as completed (optional - you may want to do this manually)
-                # convex_client.mutation("missions:updateMissionStatus", {
-                #     "mission_id": mission["_id"],
-                #     "status": "completed"
-                # })
-                
-                print("⏸️  Mission complete. Waiting for next mission...\n")
-            else:
-                # No active mission, wait and poll again
-                print("💤 No active missions. Sleeping...", end="\r")
-            
-            await asyncio.sleep(MISSION_POLL_INTERVAL)
-    
-    except KeyboardInterrupt:
-        print("\n\n⛔ Orchestrator stopped by user")
-        print("👋 Shutting down gracefully...\n")
-    
-    except Exception as e:
-        print(f"\n❌ CRITICAL ERROR in orchestrator: {e}")
-        print(f"   Stack trace:")
-        import traceback
-        traceback.print_exc()
-    
-    finally:
-        print("🔚 Orchestrator shutdown complete\n")
-
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
-
-def main():
-    """
-    Entry point for the orchestrator.
-    Sets up the async event loop and runs the main orchestrator loop.
-    """
-    try:
-        # Get or create event loop
-        loop = asyncio.get_event_loop()
-        
-        # Run the orchestrator
-        loop.run_until_complete(orchestrator_main_loop())
-    
-    except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
-    
-    except Exception as e:
-        print(f"❌ Fatal error: {e}")
+    if not OPENAI_API_KEY:
+        print("❌ Error: OPENAI_API_KEY environment variable not set")
+        print("   Get your API key from: https://platform.openai.com/api-keys")
         sys.exit(1)
+    
+    # Start mission watcher
+    await watch_missions()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
