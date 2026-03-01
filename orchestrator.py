@@ -27,6 +27,9 @@ from convex import ConvexClient
 from browser_use_sdk import AsyncBrowserUse
 from openai import AsyncOpenAI
 
+import dotenv
+dotenv.load_dotenv()
+
 
 # ============================================================================
 # CONFIGURATION
@@ -569,29 +572,137 @@ class SwarmOrchestrator:
         
         print(f"[Agent {agent_id}] 🎵 TikTok: Searching for '{search_term}'...")
         
-        # Implementation note: This is a simplified version
-        # Full implementation would be similar to mission_livestream_watcher.py
-        # For now, simulate discovery
-        await asyncio.sleep(5)  # Simulate work
-        
-        # Simulate finding content (replace with actual logic)
-        if "trending" in search_term.lower() or len(search_term) > 3:
-            discoveries = 1
+        try:
+            # Phase 1: Search for content
+            search_task = f"""
+            Go to TikTok (tiktok.com). You are already logged in.
             
-            # Extract keywords and log discovery
-            keywords = await extract_keywords_from_content(f"TikTok video about {search_term}")
+            Go to the search page and search for: "{search_term}"
             
-            self.convex_client.mutation(
-                "discoveries:logDiscovery",
-                {
-                    "video_url": f"https://tiktok.com/@user/video-{agent_id}",
-                    "thumbnail": "https://placeholder.com/150",
-                    "found_by_agent_id": agent_id,
-                    "keywords": keywords
-                }
+            Wait for search results to load. Look at the videos displayed.
+            """
+            
+            async for step in self.browser_client.run(
+                search_task,
+                session_id=session.id,
+                start_url="https://www.tiktok.com",
+                max_steps=20,
+                vision=True,
+            ):
+                pass  # Complete search
+            
+            print(f"[Agent {agent_id}] ✅ Search complete, analyzing first video...")
+            
+            # Phase 2: Click on first viral video
+            click_video_task = f"""
+            You are on the TikTok search results page for "{search_term}".
+            
+            Look at all the videos visible on screen.
+            Find ONE video that has high engagement (look for high view counts like "100K", "1M", etc.).
+            
+            Click on that ONE video to open it in the TikTok video player.
+            """
+            
+            current_url = None
+            async for step in self.browser_client.run(
+                click_video_task,
+                session_id=session.id,
+                max_steps=15,
+                vision=True,
+            ):
+                if step.url and "tiktok.com/@" in step.url:
+                    current_url = step.url
+            
+            if not current_url:
+                print(f"[Agent {agent_id}] ⚠️ Could not find video, no discovery")
+                return 0
+            
+            print(f"[Agent {agent_id}] ✅ Opened video: {current_url[:60]}...")
+            
+            # Wait for video to load
+            await asyncio.sleep(3)
+            
+            # Phase 3: Take screenshot and use OCR to detect likes
+            print(f"[Agent {agent_id}] 📸 Taking screenshot for analysis...")
+            screenshot_task = "Take a screenshot of the current TikTok video showing its metrics."
+            screenshot_url = None
+            
+            async for step in self.browser_client.run(
+                screenshot_task,
+                session_id=session.id,
+                max_steps=2,
+                vision=True,
+            ):
+                if hasattr(step, 'screenshot_url') and step.screenshot_url:
+                    screenshot_url = step.screenshot_url
+            
+            if not screenshot_url:
+                print(f"[Agent {agent_id}] ⚠️ Could not capture screenshot")
+                return 0
+            
+            # Use OpenAI Vision to read likes
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": """Look at this TikTok video screenshot. Find the heart icon (like button) on the RIGHT side and read the number next to it.
+
+The number might be: "1949", "1.2K", "450K", "1.5M", etc.
+
+Respond with ONLY the number. Examples:
+- If you see "1.2K" → respond "1.2K"
+- If you see "1949" → respond "1949"""
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": screenshot_url}
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=50
             )
             
-            print(f"[Agent {agent_id}] ✨ Found viral TikTok! Keywords: {keywords}")
+            ocr_result = response.choices[0].message.content.strip()
+            print(f"[Agent {agent_id}] 📊 Likes: {ocr_result}")
+            
+            # Parse likes count
+            likes_count = 0
+            if 'M' in ocr_result.upper():
+                likes_count = int(float(re.sub(r'[^0-9.]', '', ocr_result)) * 1_000_000)
+            elif 'K' in ocr_result.upper():
+                likes_count = int(float(re.sub(r'[^0-9.]', '', ocr_result)) * 1_000)
+            else:
+                likes_count = int(re.sub(r'[^0-9]', '', ocr_result) or '0')
+            
+            # Check if viral (50+ likes threshold)
+            if likes_count >= 50:
+                discoveries = 1
+                keywords = await extract_keywords_from_content(f"TikTok video about {search_term}")
+                
+                self.convex_client.mutation(
+                    "discoveries:logDiscovery",
+                    {
+                        "video_url": current_url,
+                        "thumbnail": screenshot_url or "https://placeholder.com/150",
+                        "found_by_agent_id": agent_id,
+                        "keywords": keywords
+                    }
+                )
+                
+                print(f"[Agent {agent_id}] ✨ VIRAL! {likes_count} likes | Keywords: {keywords}")
+            else:
+                print(f"[Agent {agent_id}] ❌ Not viral ({likes_count} likes < 50)")
+            
+        except Exception as e:
+            print(f"[Agent {agent_id}] ❌ Error: {e}")
         
         return discoveries
     
@@ -607,26 +718,145 @@ class SwarmOrchestrator:
         
         print(f"[Agent {agent_id}] 🎥 YouTube: Searching for '{search_term}'...")
         
-        # Simulate work
-        await asyncio.sleep(5)
-        
-        # Simulate finding content
-        if len(search_term) > 3:
-            discoveries = 1
+        try:
+            # Phase 1: Search for content
+            search_task = f"""
+            Go to YouTube (youtube.com).
             
-            keywords = await extract_keywords_from_content(f"YouTube short about {search_term}")
+            Use the search bar to search for: "{search_term}"
             
-            self.convex_client.mutation(
-                "discoveries:logDiscovery",
-                {
-                    "video_url": f"https://youtube.com/shorts/abc{agent_id}",
-                    "thumbnail": "https://placeholder.com/150",
-                    "found_by_agent_id": agent_id,
-                    "keywords": keywords
-                }
+            Wait for search results to load. Look for Shorts videos.
+            """
+            
+            async for step in self.browser_client.run(
+                search_task,
+                session_id=session.id,
+                start_url="https://www.youtube.com",
+                max_steps=20,
+                vision=True,
+            ):
+                pass  # Complete search
+            
+            print(f"[Agent {agent_id}] ✅ Search complete, finding first Short...")
+            
+            # Phase 2: Click on first Short
+            click_short_task = f"""
+            You are on YouTube search results for "{search_term}".
+            
+            Look for the Shorts section or find a Short video (vertical video format).
+            Click on the FIRST Short you see to open the Shorts player.
+            """
+            
+            async for step in self.browser_client.run(
+                click_short_task,
+                session_id=session.id,
+                max_steps=15,
+                vision=True,
+            ):
+                pass
+            
+            # Wait for Short to load
+            await asyncio.sleep(3)
+            
+            # Get current URL
+            current_url = None
+            get_url_task = "What is the current URL?"
+            async for step in self.browser_client.run(
+                get_url_task,
+                session_id=session.id,
+                max_steps=2,
+                vision=True,
+            ):
+                if step.url:
+                    current_url = step.url
+            
+            if not current_url or "youtube.com" not in current_url:
+                print(f"[Agent {agent_id}] ⚠️ Could not find Short, no discovery")
+                return 0
+            
+            print(f"[Agent {agent_id}] ✅ Opened Short: {current_url[:60]}...")
+            
+            # Phase 3: Take screenshot and use OCR to detect likes
+            print(f"[Agent {agent_id}] 📸 Taking screenshot for analysis...")
+            screenshot_task = "Take a screenshot of the current YouTube Short."
+            screenshot_url = None
+            
+            async for step in self.browser_client.run(
+                screenshot_task,
+                session_id=session.id,
+                max_steps=2,
+                vision=True,
+            ):
+                if hasattr(step, 'screenshot_url') and step.screenshot_url:
+                    screenshot_url = step.screenshot_url
+            
+            if not screenshot_url:
+                print(f"[Agent {agent_id}] ⚠️ Could not capture screenshot")
+                return 0
+            
+            # Use OpenAI Vision to read likes
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": """Look at this YouTube Short screenshot. Find the thumbs up (like) icon and read the number next to it.
+
+The number might be: "1.5K", "234", "12K", "1.5M", etc.
+
+Respond with ONLY the number. Examples:
+- If you see "1.5K" → respond "1.5K"
+- If you see "234" → respond "234"""
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": screenshot_url}
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=50
             )
             
-            print(f"[Agent {agent_id}] ✨ Found viral YouTube Short! Keywords: {keywords}")
+            ocr_result = response.choices[0].message.content.strip()
+            print(f"[Agent {agent_id}] 📊 Likes: {ocr_result}")
+            
+            # Parse likes count
+            likes_count = 0
+            if 'M' in ocr_result.upper():
+                likes_count = int(float(re.sub(r'[^0-9.]', '', ocr_result)) * 1_000_000)
+            elif 'K' in ocr_result.upper():
+                likes_count = int(float(re.sub(r'[^0-9.]', '', ocr_result)) * 1_000)
+            else:
+                likes_count = int(re.sub(r'[^0-9]', '', ocr_result) or '0')
+            
+            # Check if viral (50+ likes threshold)
+            if likes_count >= 50:
+                discoveries = 1
+                keywords = await extract_keywords_from_content(f"YouTube short about {search_term}")
+                
+                self.convex_client.mutation(
+                    "discoveries:logDiscovery",
+                    {
+                        "video_url": current_url,
+                        "thumbnail": screenshot_url or "https://placeholder.com/150",
+                        "found_by_agent_id": agent_id,
+                        "keywords": keywords
+                    }
+                )
+                
+                print(f"[Agent {agent_id}] ✨ VIRAL! {likes_count} likes | Keywords: {keywords}")
+            else:
+                print(f"[Agent {agent_id}] ❌ Not viral ({likes_count} likes < 50)")
+            
+        except Exception as e:
+            print(f"[Agent {agent_id}] ❌ Error: {e}")
         
         return discoveries
     
@@ -642,26 +872,138 @@ class SwarmOrchestrator:
         
         print(f"[Agent {agent_id}] 🦆 DuckDuckGo: Searching for '{search_term}'...")
         
-        # Simulate work
-        await asyncio.sleep(5)
-        
-        # Simulate finding content
-        if len(search_term) > 2:
-            discoveries = 1
+        try:
+            # Phase 1: Search on DuckDuckGo
+            search_task = f"""
+            Go to DuckDuckGo (duckduckgo.com).
             
-            keywords = await extract_keywords_from_content(f"Website about {search_term}")
+            Use the search box to search for: "{search_term}"
             
-            self.convex_client.mutation(
-                "discoveries:logDiscovery",
-                {
-                    "video_url": f"https://example.com/{search_term.replace(' ', '-')}",
-                    "thumbnail": "https://placeholder.com/150",
-                    "found_by_agent_id": agent_id,
-                    "keywords": keywords
-                }
+            Wait for search results to load.
+            """
+            
+            async for step in self.browser_client.run(
+                search_task,
+                session_id=session.id,
+                start_url="https://www.duckduckgo.com",
+                max_steps=15,
+                vision=True,
+            ):
+                pass  # Complete search
+            
+            print(f"[Agent {agent_id}] ✅ Search complete, visiting first result...")
+            
+            # Phase 2: Click on first search result
+            click_result_task = f"""
+            You are on DuckDuckGo search results for "{search_term}".
+            
+            Find the FIRST organic search result (not an ad).
+            Click on it to visit the website.
+            """
+            
+            async for step in self.browser_client.run(
+                click_result_task,
+                session_id=session.id,
+                max_steps=10,
+                vision=True,
+            ):
+                pass
+            
+            # Wait for page to load
+            await asyncio.sleep(3)
+            
+            # Get current URL
+            current_url = None
+            get_url_task = "What is the current URL?"
+            async for step in self.browser_client.run(
+                get_url_task,
+                session_id=session.id,
+                max_steps=2,
+                vision=True,
+            ):
+                if step.url:
+                    current_url = step.url
+            
+            if not current_url or "duckduckgo.com" in current_url:
+                print(f"[Agent {agent_id}] ⚠️ Still on search page, no discovery")
+                return 0
+            
+            print(f"[Agent {agent_id}] ✅ Visiting: {current_url[:60]}...")
+            
+            # Phase 3: Take screenshot and extract information
+            print(f"[Agent {agent_id}] 📸 Taking screenshot for analysis...")
+            screenshot_task = "Take a screenshot of the current page."
+            screenshot_url = None
+            
+            async for step in self.browser_client.run(
+                screenshot_task,
+                session_id=session.id,
+                max_steps=2,
+                vision=True,
+            ):
+                if hasattr(step, 'screenshot_url') and step.screenshot_url:
+                    screenshot_url = step.screenshot_url
+            
+            if not screenshot_url:
+                print(f"[Agent {agent_id}] ⚠️ Could not capture screenshot")
+                return 0
+            
+            # Use OpenAI Vision to extract information
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"""Look at this webpage screenshot for "{search_term}".
+
+Extract key information:
+1. What is the main product/service?
+2. Key features or benefits?
+3. Any pricing info?
+4. Social proof (testimonials, ratings)?
+
+Respond in 2-3 sentences. If the page is RELEVANT to "{search_term}", start with "RELEVANT:". If not relevant or just a generic list/directory, start with "NOT RELEVANT:"."""
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": screenshot_url}
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=200
             )
             
-            print(f"[Agent {agent_id}] ✨ Found relevant website! Keywords: {keywords}")
+            extraction_result = response.choices[0].message.content.strip()
+            print(f"[Agent {agent_id}] 📊 {extraction_result[:100]}...")
+            
+            # Check if relevant
+            if extraction_result.upper().startswith("RELEVANT:"):
+                discoveries = 1
+                keywords = await extract_keywords_from_content(extraction_result)
+                
+                self.convex_client.mutation(
+                    "discoveries:logDiscovery",
+                    {
+                        "video_url": current_url,
+                        "thumbnail": screenshot_url or "https://placeholder.com/150",
+                        "found_by_agent_id": agent_id,
+                        "keywords": keywords
+                    }
+                )
+                
+                print(f"[Agent {agent_id}] ✨ RELEVANT! Keywords: {keywords}")
+            else:
+                print(f"[Agent {agent_id}] ❌ Not relevant to search term")
+            
+        except Exception as e:
+            print(f"[Agent {agent_id}] ❌ Error: {e}")
         
         return discoveries
     
