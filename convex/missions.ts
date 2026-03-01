@@ -6,6 +6,22 @@ export const createMission = mutation({
     prompt: v.string(),
   },
   handler: async (ctx, args) => {
+    // Clear any stale pending stop_all commands before starting
+    // This prevents issues if resetAll was called previously
+    const pendingStops = await ctx.db
+      .query("control")
+      .filter((q) => 
+        q.and(
+          q.eq(q.field("command"), "stop_all"),
+          q.eq(q.field("status"), "pending")
+        )
+      )
+      .collect();
+    
+    for (const cmd of pendingStops) {
+      await ctx.db.patch(cmd._id, { status: "completed" });
+    }
+    
     const missionId = await ctx.db.insert("missions", {
       prompt: args.prompt,
       status: "active",

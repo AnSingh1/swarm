@@ -9,6 +9,7 @@
  */
 
 import type * as agents from "../agents.js";
+import type * as cleanup from "../cleanup.js";
 import type * as control from "../control.js";
 import type * as discoveries from "../discoveries.js";
 import type * as logs from "../logs.js";
@@ -22,6 +23,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agents: typeof agents;
+  cleanup: typeof cleanup;
   control: typeof control;
   discoveries: typeof discoveries;
   logs: typeof logs;

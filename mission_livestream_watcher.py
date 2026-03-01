@@ -218,6 +218,38 @@ class MissionLivestreamWatcher:
                 # Find weak agents
                 weak_agents = [agent_id for agent_id, energy in self.agent_energy.items() if energy <= 0]
                 
+                # EMERGENCY REFILL: If ALL agents are depleted, refill everyone
+                if weak_agents and len(weak_agents) == len(self.agent_energy):
+                    print(f"\n{'='*70}")
+                    print(f"🚨 EMERGENCY: ALL {len(weak_agents)} AGENTS DEPLETED!")
+                    print(f"💊 REFILLING ALL AGENTS TO 100 ENERGY")
+                    print(f"{'='*70}")
+                    
+                    for agent_id in weak_agents:
+                        self.agent_energy[agent_id] = 100
+                        self.log(agent_id, "Emergency refill! Energy: 0 → 100", "energy_refill", {
+                            "old": 0,
+                            "new": 100,
+                            "reason": "all_depleted"
+                        })
+                        
+                        # Update agent status
+                        try:
+                            self.convex_client.mutation(
+                                "agents:updateAgentState",
+                                {
+                                    "agent_id": agent_id,
+                                    "status": "searching",
+                                    "current_url": "Refilled and ready",
+                                    "energy": 100
+                                }
+                            )
+                        except:
+                            pass
+                    
+                    print(f"✅ All agents refilled and reset to searching status\n")
+                    continue
+                
                 if not weak_agents:
                     continue
                 
@@ -705,45 +737,60 @@ class MissionLivestreamWatcher:
             discoveries_count = 0
             discovered_screenshots = []  # Store screenshots of discoveries
             
-            # Analyze 15-20 videos one at a time
-            for video_num in range(1, 21):
+            # Analyze 40 videos one at a time (extended for more startup time)
+            for video_num in range(1, 41):
                 # Check if stop was requested
                 if not self.swarm_running:
                     print(f"[Session {session_num}] 🛑 Stop requested, ending analysis early")
                     break
                 
-                print(f"[Session {session_num}] 📹 Video {video_num}/20 - Starting analysis...")
+                print(f"[Session {session_num}] 📹 Video {video_num}/40 - Starting analysis...")
                 
                 # LOG: Analysis progress
-                self.log(session_num, f"Analyzing video {video_num}/20", "analysis", {"video_num": video_num, "total": 20})
+                self.log(session_num, f"Analyzing video {video_num}/40", "analysis", {"video_num": video_num, "total": 40})
                 
                 try:
-                    # Step 1: Click on a viral video
-                    print(f"[Session {session_num}]    🖱️  Finding and clicking video...")
-                    click_video_task = f"""
-                    You are on the TikTok search results page for "{search_term}".
-                    
-                    Look at all the videos visible on screen.
-                    Find ONE video that:
-                    - Has high view count visible (look for "100K", "500K", "1M", etc.)
-                    - Has lots of likes (heart icon with big numbers)
-                    - You haven't clicked on yet in this session
-                    
-                    Prioritize videos with the HIGHEST engagement numbers.
-                    
-                    Click on that ONE video to open it and watch it.
-                    DO NOT go to the next video yet - just click this one video.
-                    """
-                    
-                    current_url = None
-                    async for step in self.browser_client.run(
-                        click_video_task,
-                        session_id=session.id,
-                        max_steps=15,
-                        vision=True,
-                    ):
-                        if step.url and "tiktok.com/@" in step.url:
-                            current_url = step.url
+                    # Step 1: Click on first video OR scroll to next
+                    if video_num == 1:
+                        print(f"[Session {session_num}]    🖱️  Finding and clicking first viral video...")
+                        click_video_task = f"""
+                        You are on the TikTok search results page for "{search_term}".
+                        
+                        Look at all the videos visible on screen.
+                        Find ONE video that:
+                        - Has high view count visible (look for "100K", "500K", "1M", etc.)
+                        - Has lots of likes (heart icon with big numbers)
+                        
+                        Click on that ONE video to open it in the TikTok video player.
+                        """
+                        
+                        current_url = None
+                        async for step in self.browser_client.run(
+                            click_video_task,
+                            session_id=session.id,
+                            max_steps=15,
+                            vision=True,
+                        ):
+                            if step.url and "tiktok.com/@" in step.url:
+                                current_url = step.url
+                    else:
+                        # Scroll/swipe to next video in the feed
+                        print(f"[Session {session_num}]    ⬇️  Scrolling to next video...")
+                        scroll_task = """
+                        You are watching a TikTok video in the player.
+                        Swipe down or scroll down to go to the next video in the feed.
+                        Wait for the next video to load and start playing.
+                        """
+                        
+                        current_url = None
+                        async for step in self.browser_client.run(
+                            scroll_task,
+                            session_id=session.id,
+                            max_steps=8,
+                            vision=True,
+                        ):
+                            if step.url and "tiktok.com/@" in step.url:
+                                current_url = step.url
                     
                     if not current_url:
                         print(f"[Session {session_num}]    ⚠️  Could not get video URL, skipping...")
@@ -930,43 +977,17 @@ Examples:
                         except Exception as e:
                             print(f"[Session {session_num}]    ⚠️  Error logging discovery: {e}")
                     
-                    # Step 4: Go back to search results
-                    print(f"[Session {session_num}]    ⬅️  Going back to search results...")
-                    go_back_task = """
-                    Navigate back to the search results page.
-                    You can click the back button or use browser navigation.
-                    Wait for the search results to load again.
-                    """
-                    
-                    async for step in self.browser_client.run(
-                        go_back_task,
-                        session_id=session.id,
-                        max_steps=8,
-                        vision=True,
-                    ):
-                        pass
-                    
-                    # Small pause before next video
+                    # Small pause before scrolling to next video
                     await asyncio.sleep(1)
                     
                 except Exception as e:
                     print(f"[Session {session_num}]    ❌ Error: {e}")
-                    # Try to recover by going back
-                    try:
-                        async for step in self.browser_client.run(
-                            "Go back to the TikTok search results page",
-                            session_id=session.id,
-                            max_steps=5,
-                            vision=True,
-                        ):
-                            pass
-                    except:
-                        pass
                     await asyncio.sleep(1)
+                    # Continue to next video even if there was an error
                     continue
             
             print(f"\n[Session {session_num}] 🎉 Analysis complete!")
-            print(f"[Session {session_num}] 📊 Discoveries logged: {discoveries_count}/20\n")
+            print(f"[Session {session_num}] 📊 Discoveries logged: {discoveries_count}/40\n")
             
             # SWARM INTELLIGENCE: If no discoveries, deduct energy
             if discoveries_count == 0:
@@ -1073,17 +1094,17 @@ Examples:
             discoveries_count = 0
             discovered_screenshots = []
             
-            # Analyze 15-20 Shorts one at a time
-            for video_num in range(1, 21):
+            # Analyze 40 Shorts one at a time (extended for more startup time)
+            for video_num in range(1, 41):
                 # Check if stop was requested
                 if not self.swarm_running:
                     print(f"[YT Session {session_num}] 🛑 Stop requested, ending analysis early")
                     break
                 
-                print(f"[YT Session {session_num}] 📹 Short {video_num}/20 - Starting analysis...")
+                print(f"[YT Session {session_num}] 📹 Short {video_num}/40 - Starting analysis...")
                 
                 # LOG: Analysis progress
-                self.log(session_num, f"Analyzing Short {video_num}/20", "analysis", {"video_num": video_num, "total": 20})
+                self.log(session_num, f"Analyzing Short {video_num}/40", "analysis", {"video_num": video_num, "total": 40})
                 
                 try:
                     # Step 1: Click on a Short (or navigate to next if already in Shorts player)
@@ -1325,7 +1346,7 @@ Examples:
                     continue
             
             print(f"\n[YT Session {session_num}] 🎉 Analysis complete!")
-            print(f"[YT Session {session_num}] 📊 Discoveries logged: {discoveries_count}/20\n")
+            print(f"[YT Session {session_num}] 📊 Discoveries logged: {discoveries_count}/40\n")
             
             # SWARM INTELLIGENCE: If no discoveries, deduct energy
             if discoveries_count == 0:
@@ -1432,14 +1453,14 @@ Examples:
             discoveries_count = 0
             discovered_pages = []
             
-            # Visit 5-10 top search results
-            for result_num in range(1, 11):
+            # Visit 20 top search results (extended for more startup time)
+            for result_num in range(1, 21):
                 # Check if stop was requested
                 if not self.swarm_running:
                     print(f"[DDG Session {session_num}] 🛑 Stop requested, ending analysis early")
                     break
                 
-                print(f"[DDG Session {session_num}] 🔗 Result {result_num}/10 - Analyzing...")
+                print(f"[DDG Session {session_num}] 🔗 Result {result_num}/20 - Analyzing...")
                 
                 try:
                     # Step 1: Click on a search result
@@ -1689,7 +1710,7 @@ Respond in a concise 2-3 sentence summary. If the page is relevant to "{search_t
                     continue
             
             print(f"\n[DDG Session {session_num}] 🎉 Analysis complete!")
-            print(f"[DDG Session {session_num}] 📊 Discoveries logged: {discoveries_count}/10\n")
+            print(f"[DDG Session {session_num}] 📊 Discoveries logged: {discoveries_count}/20\n")
             
             # SWARM INTELLIGENCE: If no discoveries, deduct energy
             if discoveries_count == 0:

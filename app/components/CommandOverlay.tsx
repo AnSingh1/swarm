@@ -7,6 +7,7 @@ import {
   Activity,
   Radio,
   StopCircle,
+  RotateCcw,
 } from "lucide-react";
 import { 
   getAgentById, 
@@ -20,6 +21,7 @@ interface CommandOverlayProps {
   activeAgentCount: number;
   onCreateMission: (prompt: string) => void;
   onStopAll: () => void;
+  onResetAll: () => void;
 }
 
 export function CommandOverlay({
@@ -28,6 +30,7 @@ export function CommandOverlay({
   activeAgentCount,
   onCreateMission,
   onStopAll,
+  onResetAll,
 }: CommandOverlayProps) {
   const [query, setQuery] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
@@ -113,6 +116,37 @@ export function CommandOverlay({
               <span>{activeAgentCount} AGENTS ACTIVE</span>
             </div>
           )}
+          <button
+            onClick={onResetAll}
+            title="Reset All (Delete Everything)"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "4px 8px",
+              background: "transparent",
+              border: "1px solid #dc262620",
+              borderRadius: 2,
+              color: "#dc2626",
+              fontSize: 9,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all 0.2s",
+              letterSpacing: 1,
+              textTransform: "uppercase",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#dc262610";
+              e.currentTarget.style.borderColor = "#dc262640";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.borderColor = "#dc262620";
+            }}
+          >
+            <RotateCcw size={9} />
+            Reset
+          </button>
           <div
             style={{
               fontSize: 10,

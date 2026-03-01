@@ -77,6 +77,7 @@ export default function Home() {
   // Mutations
   const createMission = useMutation(api.missions.createMission);
   const sendCommand = useMutation(api.control.sendCommand);
+  const resetAll = useMutation(api.cleanup.resetAll);
 
   // Determine if swarm is running
   const isRunning = useMemo(() => {
@@ -134,6 +135,12 @@ export default function Home() {
     }
   }, [sendCommand]);
 
+  const handleResetAll = useCallback(async () => {
+    if (confirm("⚠️ RESET ALL? This will:\n- Stop all browser sessions\n- Delete all missions\n- Delete all agents\n- Delete all discoveries\n- Delete all logs\n\nThis action cannot be undone!")) {
+      await resetAll();
+    }
+  }, [resetAll]);
+
   return (
     <div style={{ position: "fixed", inset: 0, overflow: "hidden", background: "#020408" }}>
       <ResizablePane
@@ -165,6 +172,7 @@ export default function Home() {
         activeAgentCount={activeAgentCount}
         onCreateMission={handleCreateMission}
         onStopAll={handleStopAll}
+        onResetAll={handleResetAll}
       />
     </div>
   );
