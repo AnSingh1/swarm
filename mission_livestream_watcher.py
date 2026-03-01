@@ -265,13 +265,68 @@ class MissionLivestreamWatcher:
             
             # Combine all sessions
             all_valid_sessions = valid_sessions + [s for s in youtube_sessions if s is not None]
+            
+            # Now create 3 DuckDuckGo search agents (agents 7, 8, and 9) using all 3 search terms
+            print(f"\n🔍 Creating 3 DuckDuckGo search agents (no profiles)...")
+            ddg_sessions = []
+            ddg_live_urls = []
+            
+            # Use all 3 search terms for DuckDuckGo
+            ddg_search_terms = search_terms  # All 3 terms
+            
+            for i, search_term in enumerate(ddg_search_terms, 1):
+                agent_num = i + 6  # Agents 7, 8, and 9
+                print(f"\n🦆 DuckDuckGo Session {i}/3 (Agent {agent_num}):")
+                print(f"   🔍 Search term: {search_term}")
+                print(f"   🚫 No profile (anonymous)")
+                
+                try:
+                    # Create session WITHOUT profile_id for DuckDuckGo
+                    session = await self.browser_client.sessions.create(
+                        proxy_country_code="us"
+                        # No profile_id parameter
+                    )
+                    
+                    ddg_sessions.append(session)
+                    ddg_live_urls.append(session.live_url)
+                    
+                    print(f"   ✅ Session created: {session.id}")
+                    print(f"   📺 Live URL: {session.live_url}")
+                    
+                    # Update agent state in Convex
+                    try:
+                        self.convex_client.mutation(
+                            "agents:updateAgentState",
+                            {
+                                "agent_id": agent_num,
+                                "status": "searching",
+                                "current_url": session.live_url,
+                                "profile_id": "none",  # No profile for DuckDuckGo
+                            }
+                        )
+                        print(f"   ✅ Agent {agent_num} registered in Convex")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not register agent: {e}")
+                    
+                except Exception as e:
+                    print(f"   ❌ Error creating DuckDuckGo session {i}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    ddg_sessions.append(None)
+                    ddg_live_urls.append(None)
+            
+            # Combine all sessions
+            all_valid_sessions = all_valid_sessions + [s for s in ddg_sessions if s is not None]
             self.active_sessions[mission_id] = all_valid_sessions
             
             # Filter YouTube URLs
             valid_youtube_urls = [url for url in youtube_live_urls if url is not None]
             
-            # Update mission with all 6 live URLs (3 TikTok + 3 YouTube)
-            print(f"\n💾 Updating mission with {len(valid_live_urls) + len(valid_youtube_urls)} livestream URLs...")
+            # Filter DuckDuckGo URLs
+            valid_ddg_urls = [url for url in ddg_live_urls if url is not None]
+            
+            # Update mission with all 9 live URLs (3 TikTok + 3 YouTube + 3 DuckDuckGo)
+            print(f"\n💾 Updating mission with {len(valid_live_urls) + len(valid_youtube_urls) + len(valid_ddg_urls)} livestream URLs...")
             update_args = {
                 "missionId": str(mission_id) if not isinstance(mission_id, str) else mission_id,
                 "liveUrl": valid_live_urls[0] if len(valid_live_urls) > 0 else "",
@@ -292,6 +347,15 @@ class MissionLivestreamWatcher:
             if len(valid_youtube_urls) > 2:
                 update_args["liveUrl6"] = valid_youtube_urls[2]
                 print(f"   🎥 YouTube 3: {valid_youtube_urls[2][:50]}...")
+            if len(valid_ddg_urls) > 0:
+                update_args["liveUrl7"] = valid_ddg_urls[0]
+                print(f"   🦆 DuckDuckGo 1: {valid_ddg_urls[0][:50]}...")
+            if len(valid_ddg_urls) > 1:
+                update_args["liveUrl8"] = valid_ddg_urls[1]
+                print(f"   🦆 DuckDuckGo 2: {valid_ddg_urls[1][:50]}...")
+            if len(valid_ddg_urls) > 2:
+                update_args["liveUrl9"] = valid_ddg_urls[2]
+                print(f"   🦆 DuckDuckGo 3: {valid_ddg_urls[2][:50]}...")
             
             print(f"   🔍 Debug - Update args: {update_args.keys()}")
             
@@ -300,7 +364,7 @@ class MissionLivestreamWatcher:
                 update_args
             )
             
-            print(f"\n🎬 Starting parallel analysis: {len(valid_sessions)} TikTok + {len([s for s in youtube_sessions if s is not None])} YouTube...\n")
+            print(f"\n🎬 Starting parallel analysis: {len(valid_sessions)} TikTok + {len([s for s in youtube_sessions if s is not None])} YouTube + {len([s for s in ddg_sessions if s is not None])} DuckDuckGo...\n")
             
             # Run all sessions concurrently
             analysis_tasks = []
@@ -320,6 +384,14 @@ class MissionLivestreamWatcher:
                 )
                 analysis_tasks.append(task)
             
+            # DuckDuckGo sessions (agents 7, 8, 9)
+            for i, (session, search_term) in enumerate([(s, st) for s, st in zip(ddg_sessions, ddg_search_terms) if s is not None], 1):
+                agent_num = i + 6
+                task = asyncio.create_task(
+                    self.run_duckduckgo_analysis(session, search_term, agent_num)
+                )
+                analysis_tasks.append(task)
+            
             # Wait for all analysis tasks to complete
             results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
             
@@ -331,9 +403,16 @@ class MissionLivestreamWatcher:
             
             num_tiktok = len([s for s in sessions if s is not None])
             num_youtube = len([s for s in youtube_sessions if s is not None])
+            num_ddg = len([s for s in ddg_sessions if s is not None])
             
             for i, result in enumerate(results, 1):
-                platform = "TikTok" if i <= num_tiktok else "YouTube"
+                if i <= num_tiktok:
+                    platform = "TikTok"
+                elif i <= num_tiktok + num_youtube:
+                    platform = "YouTube"
+                else:
+                    platform = "DuckDuckGo"
+                    
                 if isinstance(result, Exception):
                     print(f"Session {i} ({platform}): ❌ Error - {result}")
                 elif isinstance(result, dict):
@@ -343,6 +422,7 @@ class MissionLivestreamWatcher:
             print(f"\n📊 TOTAL DISCOVERIES: {total_discoveries}")
             print(f"   - TikTok Sessions: {num_tiktok}")
             print(f"   - YouTube Sessions: {num_youtube}")
+            print(f"   - DuckDuckGo Sessions: {num_ddg}")
             print(f"{'='*60}\n")
             
         except Exception as e:
@@ -931,6 +1011,279 @@ Examples:
             import traceback
             traceback.print_exc()
             return {"discoveries": 0, "screenshots": []}
+    
+    async def run_duckduckgo_analysis(self, session, search_term: str, session_num: int):
+        """Run web search and extraction analysis on DuckDuckGo."""
+        try:
+            print(f"[DDG Session {session_num}] 🔍 Starting search for: {search_term}")
+            
+            # Update agent status to searching
+            try:
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": session_num,
+                        "status": "searching",
+                        "current_url": f"Searching DuckDuckGo for: {search_term}",
+                        "profile_id": "none",
+                    }
+                )
+            except Exception as e:
+                print(f"[DDG Session {session_num}] ⚠️  Could not update agent status: {e}")
+            
+            # Phase 1: Search on DuckDuckGo
+            search_task = f"""
+            Go to DuckDuckGo (duckduckgo.com).
+            
+            Use the search box to search for: "{search_term}"
+            
+            Wait for search results to load. Look at the top search results.
+            """
+            
+            async for step in self.browser_client.run(
+                search_task,
+                session_id=session.id,
+                start_url="https://www.duckduckgo.com",
+                max_steps=15,
+                vision=True,
+            ):
+                pass  # Complete search
+            
+            print(f"[DDG Session {session_num}] ✅ Search complete\n")
+            
+            # Phase 2: Visit top search results and extract information
+            print(f"[DDG Session {session_num}] 🌐 Visiting and extracting from websites...\n")
+            
+            discoveries_count = 0
+            discovered_pages = []
+            
+            # Visit 5-10 top search results
+            for result_num in range(1, 11):
+                print(f"[DDG Session {session_num}] 🔗 Result {result_num}/10 - Analyzing...")
+                
+                try:
+                    # Step 1: Click on a search result
+                    if result_num == 1:
+                        print(f"[DDG Session {session_num}]    🖱️  Clicking on first search result...")
+                        click_result_task = f"""
+                        You are on DuckDuckGo search results for "{search_term}".
+                        
+                        Find the FIRST organic search result (not an ad).
+                        Click on it to visit the website.
+                        """
+                        
+                        async for step in self.browser_client.run(
+                            click_result_task,
+                            session_id=session.id,
+                            max_steps=10,
+                            vision=True,
+                        ):
+                            pass
+                    else:
+                        # Go back to search results and click next result
+                        print(f"[DDG Session {session_num}]    ⬅️  Going back to search results...")
+                        back_task = """
+                        Navigate back to the DuckDuckGo search results page.
+                        You can click the back button or use browser navigation.
+                        """
+                        
+                        async for step in self.browser_client.run(
+                            back_task,
+                            session_id=session.id,
+                            max_steps=8,
+                            vision=True,
+                        ):
+                            pass
+                        
+                        await asyncio.sleep(1)
+                        
+                        print(f"[DDG Session {session_num}]    🖱️  Clicking on next result...")
+                        click_next_task = f"""
+                        You are on DuckDuckGo search results.
+                        
+                        Find the next organic search result that you haven't clicked yet.
+                        Click on it to visit the website.
+                        """
+                        
+                        async for step in self.browser_client.run(
+                            click_next_task,
+                            session_id=session.id,
+                            max_steps=10,
+                            vision=True,
+                        ):
+                            pass
+                    
+                    # Step 2: Wait for page to load
+                    print(f"[DDG Session {session_num}]    ⏱️  Waiting for page to load...")
+                    await asyncio.sleep(3)
+                    
+                    # Step 3: Get current URL
+                    current_url = None
+                    get_url_task = "What is the current URL?"
+                    async for step in self.browser_client.run(
+                        get_url_task,
+                        session_id=session.id,
+                        max_steps=2,
+                        vision=True,
+                    ):
+                        if step.url:
+                            current_url = step.url
+                    
+                    if not current_url or "duckduckgo.com" in current_url:
+                        print(f"[DDG Session {session_num}]    ⚠️  Still on search page or no URL, skipping...")
+                        continue
+                    
+                    print(f"[DDG Session {session_num}]    ✅ Visiting: {current_url[:60]}...")
+                    
+                    # Step 4: Take screenshot and extract key information
+                    print(f"[DDG Session {session_num}]    📸 Taking screenshot...")
+                    screenshot_task = "Take a screenshot of the current page."
+                    screenshot_url = None
+                    
+                    async for step in self.browser_client.run(
+                        screenshot_task,
+                        session_id=session.id,
+                        max_steps=2,
+                        vision=True,
+                    ):
+                        if hasattr(step, 'screenshot_url') and step.screenshot_url:
+                            screenshot_url = step.screenshot_url
+                    
+                    if not screenshot_url:
+                        print(f"[DDG Session {session_num}]    ⚠️  Could not capture screenshot, skipping...")
+                        continue
+                    
+                    print(f"[DDG Session {session_num}]    🔍 Extracting information from page...")
+                    
+                    # Use OpenAI Vision API to extract key information
+                    page_info = ""
+                    is_relevant = False
+                    
+                    try:
+                        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+                        
+                        response = await client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": f"""Look at this webpage screenshot for "{search_term}".
+
+Extract key information about this company/product:
+1. What is the main product or service?
+2. What are the key features or benefits mentioned?
+3. Is there any pricing information visible?
+4. Any social proof (testimonials, user count, ratings)?
+
+Respond in a concise 2-3 sentence summary. If the page is relevant to "{search_term}", start with "RELEVANT:". If not relevant or it's just a generic list/directory, start with "NOT RELEVANT:".
+"""
+                                        },
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": screenshot_url
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            max_tokens=200
+                        )
+                        
+                        extraction_result = response.choices[0].message.content.strip()
+                        print(f"[DDG Session {session_num}]    📊 Extraction: {extraction_result[:100]}...")
+                        
+                        # Check if relevant
+                        if extraction_result.startswith("RELEVANT:"):
+                            is_relevant = True
+                            page_info = extraction_result.replace("RELEVANT:", "").strip()
+                            print(f"[DDG Session {session_num}]    ✅ RELEVANT PAGE!")
+                        else:
+                            print(f"[DDG Session {session_num}]    ⏭️  Not relevant, skipping")
+                            
+                    except Exception as e:
+                        print(f"[DDG Session {session_num}]    ⚠️  Extraction Error: {e}")
+                        print(f"[DDG Session {session_num}]    ⏭️  Skipping this page")
+                        is_relevant = False
+                    
+                    # Only log if relevant
+                    if is_relevant and current_url:
+                        try:
+                            # Log to Convex
+                            self.convex_client.mutation(
+                                "discoveries:logDiscovery",
+                                {
+                                    "video_url": current_url,
+                                    "thumbnail": screenshot_url if screenshot_url else "",
+                                    "found_by_agent_id": session_num,
+                                }
+                            )
+                            discoveries_count += 1
+                            
+                            # Update agent status to found_trend
+                            try:
+                                self.convex_client.mutation(
+                                    "agents:updateAgentState",
+                                    {
+                                        "agent_id": session_num,
+                                        "status": "found_trend",
+                                        "current_url": current_url,
+                                        "profile_id": "none",
+                                    }
+                                )
+                            except Exception as e:
+                                print(f"[DDG Session {session_num}]    ⚠️  Could not update agent status: {e}")
+                            
+                            # Store page info
+                            discovery_info = {
+                                "url": current_url,
+                                "screenshot": screenshot_url,
+                                "info": page_info
+                            }
+                            discovered_pages.append(discovery_info)
+                            
+                            print(f"[DDG Session {session_num}]    ✨ DISCOVERY #{discoveries_count} LOGGED!")
+                            print(f"[DDG Session {session_num}]    🔗 {current_url}")
+                            print(f"[DDG Session {session_num}]    📝 {page_info[:80]}...")
+                            print(f"[DDG Session {session_num}]    📸 Screenshot: {screenshot_url}")
+                        except Exception as e:
+                            print(f"[DDG Session {session_num}]    ⚠️  Error logging discovery: {e}")
+                    
+                    # Small pause before next result
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    print(f"[DDG Session {session_num}]    ❌ Error: {e}")
+                    await asyncio.sleep(1)
+                    continue
+            
+            print(f"\n[DDG Session {session_num}] 🎉 Analysis complete!")
+            print(f"[DDG Session {session_num}] 📊 Discoveries logged: {discoveries_count}/10\n")
+            
+            # Update agent status to idle
+            try:
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": session_num,
+                        "status": "idle",
+                        "current_url": "Analysis complete",
+                        "profile_id": "none",
+                    }
+                )
+            except Exception as e:
+                print(f"[DDG Session {session_num}] ⚠️  Could not update agent status: {e}")
+            
+            return {"discoveries": discoveries_count, "pages": discovered_pages}
+            
+        except Exception as e:
+            print(f"[DDG Session {session_num}] ❌ Error in DuckDuckGo session: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"discoveries": 0, "pages": []}
     
     
     async def cleanup_session(self, mission_id):

@@ -21,12 +21,9 @@ export default function Home() {
       hasLiveUrl4: !!latestMission.liveUrl4,
       hasLiveUrl5: !!latestMission.liveUrl5,
       hasLiveUrl6: !!latestMission.liveUrl6,
-      liveUrl: latestMission.liveUrl?.substring(0, 50),
-      liveUrl2: latestMission.liveUrl2?.substring(0, 50),
-      liveUrl3: latestMission.liveUrl3?.substring(0, 50),
-      liveUrl4: latestMission.liveUrl4?.substring(0, 50),
-      liveUrl5: latestMission.liveUrl5?.substring(0, 50),
-      liveUrl6: latestMission.liveUrl6?.substring(0, 50),
+      hasLiveUrl7: !!latestMission.liveUrl7,
+      hasLiveUrl8: !!latestMission.liveUrl8,
+      hasLiveUrl9: !!latestMission.liveUrl9,
     });
   }
   
@@ -68,13 +65,13 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Livestream View - 6 Streams (3 TikTok + 3 YouTube) */}
-      {(latestMission?.liveUrl || latestMission?.liveUrl2 || latestMission?.liveUrl3 || latestMission?.liveUrl4 || latestMission?.liveUrl5 || latestMission?.liveUrl6) && (
+      {/* Livestream View - 9 Streams (3 TikTok + 3 YouTube + 3 DuckDuckGo) */}
+      {(latestMission?.liveUrl || latestMission?.liveUrl2 || latestMission?.liveUrl3 || latestMission?.liveUrl4 || latestMission?.liveUrl5 || latestMission?.liveUrl6 || latestMission?.liveUrl7 || latestMission?.liveUrl8 || latestMission?.liveUrl9) && (
         <div className="mb-8 p-4 border border-green-600 rounded">
           <h2 className="text-xl font-semibold mb-4 text-green-400">
-            🔴 Live Streams ({[latestMission.liveUrl, latestMission.liveUrl2, latestMission.liveUrl3, latestMission.liveUrl4, latestMission.liveUrl5, latestMission.liveUrl6].filter(Boolean).length})
+            🔴 Live Streams ({[latestMission.liveUrl, latestMission.liveUrl2, latestMission.liveUrl3, latestMission.liveUrl4, latestMission.liveUrl5, latestMission.liveUrl6, latestMission.liveUrl7, latestMission.liveUrl8, latestMission.liveUrl9].filter(Boolean).length})
           </h2>
-          <div className="mb-2 text-sm text-gray-400">3 TikTok + 3 YouTube Shorts</div>
+          <div className="mb-2 text-sm text-gray-400">3 TikTok + 3 YouTube + 3 DuckDuckGo</div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {latestMission.liveUrl && (
               <div className="bg-gray-900 rounded overflow-hidden">
@@ -138,6 +135,39 @@ export default function Home() {
                   src={latestMission.liveUrl6}
                   className="w-full h-[400px] border-0"
                   title="Browser Livestream 6"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl7 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-purple-900">DuckDuckGo 1</div>
+                <iframe
+                  src={latestMission.liveUrl7}
+                  className="w-full h-[400px] border-0"
+                  title="Browser Livestream 7"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl8 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-purple-900">DuckDuckGo 2</div>
+                <iframe
+                  src={latestMission.liveUrl8}
+                  className="w-full h-[400px] border-0"
+                  title="Browser Livestream 8"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl9 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-purple-900">DuckDuckGo 3</div>
+                <iframe
+                  src={latestMission.liveUrl9}
+                  className="w-full h-[400px] border-0"
+                  title="Browser Livestream 9"
                   allow="autoplay; fullscreen"
                 />
               </div>
