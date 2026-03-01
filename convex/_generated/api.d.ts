@@ -14,6 +14,7 @@ import type * as control from "../control.js";
 import type * as discoveries from "../discoveries.js";
 import type * as logs from "../logs.js";
 import type * as missions from "../missions.js";
+import type * as signals from "../signals.js";
 
 import type {
   ApiFromModules,
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   discoveries: typeof discoveries;
   logs: typeof logs;
   missions: typeof missions;
+  signals: typeof signals;
 }>;
 
 /**

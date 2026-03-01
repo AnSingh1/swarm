@@ -36,11 +36,8 @@ export const deleteAllDiscoveries = mutation({
 export const deleteAllLivestreams = mutation({
   args: {},
   handler: async (ctx) => {
-    const livestreams = await ctx.db.query("livestream").collect();
-    for (const livestream of livestreams) {
-      await ctx.db.delete(livestream._id);
-    }
-    return `Deleted ${livestreams.length} livestream frames`;
+    // Livestream table removed from schema - this is a no-op
+    return `Livestream table no longer exists`;
   },
 });
 
@@ -80,14 +77,14 @@ export const resetAll = mutation({
     const agents = await ctx.db.query("agents").collect();
     const discoveries = await ctx.db.query("discoveries").collect();
     const logs = await ctx.db.query("logs").collect();
-    const livestreams = await ctx.db.query("livestream").collect();
+    const signals = await ctx.db.query("signals").collect();
     const commands = await ctx.db.query("control").collect();
     
     for (const mission of missions) await ctx.db.delete(mission._id);
     for (const agent of agents) await ctx.db.delete(agent._id);
     for (const discovery of discoveries) await ctx.db.delete(discovery._id);
     for (const log of logs) await ctx.db.delete(log._id);
-    for (const livestream of livestreams) await ctx.db.delete(livestream._id);
+    for (const signal of signals) await ctx.db.delete(signal._id);
     for (const command of commands) await ctx.db.delete(command._id);
     
     // DO NOT insert stop_all - it causes issues with new missions
@@ -98,7 +95,7 @@ export const resetAll = mutation({
       agents: agents.length,
       discoveries: discoveries.length,
       logs: logs.length,
-      livestreams: livestreams.length,
+      signals: signals.length,
       commands: commands.length,
     };
   },

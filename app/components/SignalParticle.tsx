@@ -40,42 +40,51 @@ export function SignalParticles({ signals }: { signals: AgentSignal[] }) {
     if (processedRef.current.has(latest._id)) return;
     processedRef.current.add(latest._id);
 
-    // Map agent_id to index (agents 1-9 become indices 0-8)
-    const fromIdx = latest.fromAgent - 1;
-    const toIdx = latest.toAgent - 1;
-    if (fromIdx < 0 || fromIdx >= AGENTS.length || toIdx < 0 || toIdx >= AGENTS.length) return;
-
-    const fromAgent = AGENTS[fromIdx];
-    const toAgent = AGENTS[toIdx];
-
     const id = latest._id;
-    setParticles((prev) => [
-      ...prev,
-      {
-        id: `${id}_a`,
-        fromPos: getAgentPosition(fromIdx),
-        toPos: BLACKBOARD_POS.clone(),
-        color: fromAgent.color,
-        phase: "to_center",
-        progress: 0,
-        message: latest.message,
-      },
-    ]);
-
-    setTimeout(() => {
+    
+    // Handle two cases:
+    // 1. fromAgent=X, toAgent=0: Log event - agent X sends orb to center
+    // 2. fromAgent=0, toAgent=X: Broadcast - center sends orb to agent X (discovery)
+    
+    if (latest.fromAgent === 0 && latest.toAgent > 0) {
+      // Broadcast from center to specific agent
+      const toIdx = latest.toAgent - 1;
+      if (toIdx < 0 || toIdx >= AGENTS.length) return;
+      
+      const toAgent = AGENTS[toIdx];
+      
       setParticles((prev) => [
         ...prev,
         {
-          id: `${id}_b`,
+          id: `${id}_broadcast`,
           fromPos: BLACKBOARD_POS.clone(),
           toPos: getAgentPosition(toIdx),
-          color: toAgent.color,
+          color: "#ffcc00", // Gold color for discoveries
           phase: "from_center",
           progress: 0,
           message: latest.message,
         },
       ]);
-    }, 600);
+    } else if (latest.fromAgent > 0 && latest.toAgent === 0) {
+      // Normal log - agent sends to center
+      const fromIdx = latest.fromAgent - 1;
+      if (fromIdx < 0 || fromIdx >= AGENTS.length) return;
+      
+      const fromAgent = AGENTS[fromIdx];
+      
+      setParticles((prev) => [
+        ...prev,
+        {
+          id: `${id}_log`,
+          fromPos: getAgentPosition(fromIdx),
+          toPos: BLACKBOARD_POS.clone(),
+          color: fromAgent.color,
+          phase: "to_center",
+          progress: 0,
+          message: latest.message,
+        },
+      ]);
+    }
   }, [signals]);
 
   useEffect(() => {

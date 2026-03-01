@@ -7,7 +7,7 @@ import { api } from "../convex/_generated/api";
 import { ResizablePane } from "./components/ResizablePane";
 import { ContentWhiteboard } from "./components/ContentWhiteboard";
 import { CommandOverlay } from "./components/CommandOverlay";
-import { logsToSignals, type DiscoveredContent, type LogEntry, type AgentData } from "./hooks/useAgentData";
+import { type DiscoveredContent, type LogEntry, type AgentData, type AgentSignal } from "./hooks/useAgentData";
 
 // Dynamically import SwarmScene to avoid SSR issues with Three.js
 const SwarmScene = dynamic(
@@ -73,6 +73,7 @@ export default function Home() {
   const allAgents = useQuery(api.agents.getAllAgents) as AgentData[] | undefined;
   const discoveries = useQuery(api.discoveries.getDiscoveries) as DiscoveredContent[] | undefined;
   const recentLogs = useQuery(api.logs.getRecentLogs, { limit: 50 }) as LogEntry[] | undefined;
+  const recentSignals = useQuery(api.signals.getRecentSignals, { limit: 50 });
   
   // Mutations
   const createMission = useMutation(api.missions.createMission);
@@ -116,10 +117,10 @@ export default function Home() {
     return Object.values(liveUrls).filter(Boolean).length;
   }, [liveUrls]);
 
-  // Convert logs to signals for 3D visualization
+  // Use actual signals from database (orbs)
   const signals = useMemo(() => {
-    return logsToSignals(recentLogs || []);
-  }, [recentLogs]);
+    return (recentSignals || []) as AgentSignal[];
+  }, [recentSignals]);
 
   // Handlers
   const handleCreateMission = useCallback(async (prompt: string) => {

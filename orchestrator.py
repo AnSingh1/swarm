@@ -22,6 +22,7 @@ import asyncio
 import os
 import sys
 import re
+import time
 from typing import Optional, List, Dict, Set
 from convex import ConvexClient
 from browser_use_sdk import AsyncBrowserUse
@@ -155,6 +156,61 @@ class SwarmOrchestrator:
         # Original mission context
         self.mission_id: Optional[str] = None
         self.original_search_terms: List[str] = []
+    
+    def log_event(self, agent_id: int, message: str, log_type: str, metadata: dict = None):
+        """
+        Log an event and create an orb animation.
+        Orb goes from agent to center (blackboard).
+        """
+        try:
+            timestamp = int(time.time() * 1000)
+            
+            # Add log to database
+            self.convex_client.mutation(
+                "logs:addLog",
+                {
+                    "agent_id": agent_id,
+                    "message": message,
+                    "type": log_type,
+                    "timestamp": timestamp,
+                    "metadata": str(metadata) if metadata else None
+                }
+            )
+            
+            # Create orb from agent to center
+            self.convex_client.mutation(
+                "signals:createSignal",
+                {
+                    "fromAgent": agent_id,
+                    "toAgent": 0,  # 0 = center/blackboard
+                    "message": message,
+                    "signalType": log_type,
+                    "timestamp": timestamp
+                }
+            )
+        except Exception as e:
+            print(f"[Agent {agent_id}] ⚠️  Logging error: {e}")
+    
+    def broadcast_discovery(self, agent_id: int, message: str, keywords: str):
+        """
+        Broadcast a discovery to all agents.
+        Creates orbs from center to all agents.
+        """
+        try:
+            timestamp = int(time.time() * 1000)
+            
+            # Create broadcast orbs from center to all agents
+            self.convex_client.mutation(
+                "signals:broadcastSignal",
+                {
+                    "fromAgent": agent_id,
+                    "message": f"🎉 {message} | Keywords: {keywords}",
+                    "signalType": "discovery_broadcast",
+                    "timestamp": timestamp
+                }
+            )
+        except Exception as e:
+            print(f"[Agent {agent_id}] ⚠️  Broadcast error: {e}")
         
     def get_profile_ids(self) -> List[str]:
         """Return 3 profile IDs for TikTok agents."""
@@ -218,6 +274,9 @@ class SwarmOrchestrator:
                     }
                 )
                 
+                # Log initialization
+                self.log_event(i, f"Initialized for TikTok: {search_term}", "status", {"platform": "tiktok", "term": search_term})
+                
                 print(f"   ✅ Agent {i} (TikTok): {search_term} | Energy: 100")
                 
             except Exception as e:
@@ -253,6 +312,9 @@ class SwarmOrchestrator:
                     }
                 )
                 
+                # Log initialization
+                self.log_event(i, f"Initialized for YouTube: {search_term}", "status", {"platform": "youtube", "term": search_term})
+                
                 print(f"   ✅ Agent {i} (YouTube): {search_term} | Energy: 100")
                 
             except Exception as e:
@@ -287,6 +349,9 @@ class SwarmOrchestrator:
                         "energy": 100
                     }
                 )
+                
+                # Log initialization
+                self.log_event(i, f"Initialized for DuckDuckGo: {search_term}", "status", {"platform": "duckduckgo", "term": search_term})
                 
                 print(f"   ✅ Agent {i} (DuckDuckGo): {search_term} | Energy: 100")
                 
@@ -397,6 +462,9 @@ class SwarmOrchestrator:
                         }
                     )
                     
+                    # Log reassignment
+                    self.log_event(agent_id, f"Reassigned to exploit: {keywords}", "task_swap", {"keywords": keywords, "old_energy": weak_agent['energy']})
+                    
                     print(f"      🎯 New search: {keywords}")
                     print(f"      ⚡ Energy reset: 100")
                     
@@ -481,6 +549,9 @@ class SwarmOrchestrator:
                     }
                 )
                 
+                # Log search start
+                self.log_event(agent_id, f"Starting search: {search_term}", "search", {"platform": platform, "mode": "exploit" if exploitation_mode else "explore"})
+                
                 # ============================================================
                 # EXECUTE PLATFORM-SPECIFIC ANALYSIS TASK
                 # ============================================================
@@ -520,6 +591,9 @@ class SwarmOrchestrator:
                             "energy": new_energy
                         }
                     )
+                    
+                    # Log energy gain
+                    self.log_event(agent_id, f"Energy restored to 100 ({discoveries_made} discoveries)", "energy_gain", {"old_energy": current_energy, "new_energy": new_energy, "discoveries": discoveries_made})
                 else:
                     # FAILURE: Deduct 30 energy
                     new_energy = max(0, current_energy - 30)
@@ -533,6 +607,9 @@ class SwarmOrchestrator:
                         }
                     )
                     
+                    # Log energy loss
+                    self.log_event(agent_id, f"Energy depleted: {current_energy} → {new_energy}", "energy_loss", {"old_energy": current_energy, "new_energy": new_energy})
+                    
                     if new_energy <= 0:
                         print(f"[Agent {agent_id}] ⚠️  Energy depleted! Marked as WEAK")
                         self.convex_client.mutation(
@@ -543,6 +620,9 @@ class SwarmOrchestrator:
                                 "current_url": "Energy depleted"
                             }
                         )
+                        
+                        # Log weak status
+                        self.log_event(agent_id, "Agent marked as WEAK - awaiting reassignment", "status", {"energy": 0})
                 
                 # Small delay before next iteration
                 await asyncio.sleep(2)
@@ -571,6 +651,7 @@ class SwarmOrchestrator:
         discoveries = 0
         
         print(f"[Agent {agent_id}] 🎵 TikTok: Searching for '{search_term}'...")
+        self.log_event(agent_id, f"Searching TikTok for: {search_term}", "search", {"platform": "tiktok", "term": search_term})
         
         try:
             # Phase 1: Search for content
@@ -615,9 +696,11 @@ class SwarmOrchestrator:
             
             if not current_url:
                 print(f"[Agent {agent_id}] ⚠️ Could not find video, no discovery")
+                self.log_event(agent_id, "No video found", "error", {"platform": "tiktok"})
                 return 0
             
             print(f"[Agent {agent_id}] ✅ Opened video: {current_url[:60]}...")
+            self.log_event(agent_id, f"Analyzing video", "analysis", {"url": current_url[:60]})
             
             # Wait for video to load
             await asyncio.sleep(3)
@@ -672,6 +755,7 @@ Respond with ONLY the number. Examples:
             
             ocr_result = response.choices[0].message.content.strip()
             print(f"[Agent {agent_id}] 📊 Likes: {ocr_result}")
+            self.log_event(agent_id, f"Detected {ocr_result} likes", "likes", {"likes_raw": ocr_result})
             
             # Parse likes count
             likes_count = 0
@@ -698,11 +782,18 @@ Respond with ONLY the number. Examples:
                 )
                 
                 print(f"[Agent {agent_id}] ✨ VIRAL! {likes_count} likes | Keywords: {keywords}")
+                
+                # Log discovery
+                self.log_event(agent_id, f"VIRAL VIDEO FOUND! {likes_count} likes", "discovery", {"likes": likes_count, "keywords": keywords, "url": current_url})
+                
+                # Broadcast discovery to all agents (orbs from center to all)
+                self.broadcast_discovery(agent_id, f"Viral TikTok found by Agent {agent_id}", keywords)
             else:
                 print(f"[Agent {agent_id}] ❌ Not viral ({likes_count} likes < 50)")
             
         except Exception as e:
             print(f"[Agent {agent_id}] ❌ Error: {e}")
+            self.log_event(agent_id, f"Error in TikTok analysis: {str(e)}", "error", {"platform": "tiktok"})
         
         return discoveries
     
@@ -717,6 +808,7 @@ Respond with ONLY the number. Examples:
         discoveries = 0
         
         print(f"[Agent {agent_id}] 🎥 YouTube: Searching for '{search_term}'...")
+        self.log_event(agent_id, f"Searching YouTube for: {search_term}", "search", {"platform": "youtube", "term": search_term})
         
         try:
             # Phase 1: Search for content
@@ -772,9 +864,11 @@ Respond with ONLY the number. Examples:
             
             if not current_url or "youtube.com" not in current_url:
                 print(f"[Agent {agent_id}] ⚠️ Could not find Short, no discovery")
+                self.log_event(agent_id, "No Short found", "error", {"platform": "youtube"})
                 return 0
             
             print(f"[Agent {agent_id}] ✅ Opened Short: {current_url[:60]}...")
+            self.log_event(agent_id, f"Analyzing Short", "analysis", {"url": current_url[:60]})
             
             # Phase 3: Take screenshot and use OCR to detect likes
             print(f"[Agent {agent_id}] 📸 Taking screenshot for analysis...")
@@ -826,6 +920,7 @@ Respond with ONLY the number. Examples:
             
             ocr_result = response.choices[0].message.content.strip()
             print(f"[Agent {agent_id}] 📊 Likes: {ocr_result}")
+            self.log_event(agent_id, f"Detected {ocr_result} likes", "likes", {"likes_raw": ocr_result})
             
             # Parse likes count
             likes_count = 0
@@ -852,11 +947,18 @@ Respond with ONLY the number. Examples:
                 )
                 
                 print(f"[Agent {agent_id}] ✨ VIRAL! {likes_count} likes | Keywords: {keywords}")
+                
+                # Log discovery
+                self.log_event(agent_id, f"VIRAL SHORT FOUND! {likes_count} likes", "discovery", {"likes": likes_count, "keywords": keywords, "url": current_url})
+                
+                # Broadcast discovery to all agents
+                self.broadcast_discovery(agent_id, f"Viral YouTube Short found by Agent {agent_id}", keywords)
             else:
                 print(f"[Agent {agent_id}] ❌ Not viral ({likes_count} likes < 50)")
             
         except Exception as e:
             print(f"[Agent {agent_id}] ❌ Error: {e}")
+            self.log_event(agent_id, f"Error in YouTube analysis: {str(e)}", "error", {"platform": "youtube"})
         
         return discoveries
     
@@ -871,6 +973,7 @@ Respond with ONLY the number. Examples:
         discoveries = 0
         
         print(f"[Agent {agent_id}] 🦆 DuckDuckGo: Searching for '{search_term}'...")
+        self.log_event(agent_id, f"Searching DuckDuckGo for: {search_term}", "search", {"platform": "duckduckgo", "term": search_term})
         
         try:
             # Phase 1: Search on DuckDuckGo
@@ -926,9 +1029,11 @@ Respond with ONLY the number. Examples:
             
             if not current_url or "duckduckgo.com" in current_url:
                 print(f"[Agent {agent_id}] ⚠️ Still on search page, no discovery")
+                self.log_event(agent_id, "Could not navigate to result", "error", {"platform": "duckduckgo"})
                 return 0
             
             print(f"[Agent {agent_id}] ✅ Visiting: {current_url[:60]}...")
+            self.log_event(agent_id, f"Analyzing webpage", "analysis", {"url": current_url[:60]})
             
             # Phase 3: Take screenshot and extract information
             print(f"[Agent {agent_id}] 📸 Taking screenshot for analysis...")
@@ -999,11 +1104,18 @@ Respond in 2-3 sentences. If the page is RELEVANT to "{search_term}", start with
                 )
                 
                 print(f"[Agent {agent_id}] ✨ RELEVANT! Keywords: {keywords}")
+                
+                # Log discovery
+                self.log_event(agent_id, f"RELEVANT website found!", "discovery", {"keywords": keywords, "url": current_url})
+                
+                # Broadcast discovery to all agents
+                self.broadcast_discovery(agent_id, f"Relevant website found by Agent {agent_id}", keywords)
             else:
                 print(f"[Agent {agent_id}] ❌ Not relevant to search term")
             
         except Exception as e:
             print(f"[Agent {agent_id}] ❌ Error: {e}")
+            self.log_event(agent_id, f"Error in DuckDuckGo analysis: {str(e)}", "error", {"platform": "duckduckgo"})
         
         return discoveries
     

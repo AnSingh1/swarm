@@ -74,4 +74,12 @@ export default defineSchema({
     metadata: v.optional(v.string()),
   }).index("by_status", ["status"])
     .index("by_timestamp", ["timestamp"]),
+  
+  signals: defineTable({
+    fromAgent: v.number(),      // Source agent (0 = blackboard center)
+    toAgent: v.number(),        // Target agent (0 = blackboard center)
+    message: v.string(),        // Event message
+    signalType: v.string(),     // Type of signal (log, discovery, etc)
+    timestamp: v.number(),      // Unix timestamp
+  }).index("by_timestamp", ["timestamp"]),
 });
