@@ -28,16 +28,18 @@ curl -fsSL https://browser-use.com/profile.sh | sh
 
 ### 1. Install Dependencies
 ```bash
-pip install browser-use-sdk convex
+pip install browser-use-sdk convex openai
 ```
 
 ### 2. Set Environment Variables
 ```bash
-export BROWSER_USE_API_KEY='your_key_here'
+export BROWSER_USE_API_KEY='your_browser_use_key'
+export OPENAI_API_KEY='your_openai_key'
 export CONVEX_URL='https://flexible-retriever-257.convex.cloud'
 ```
 
 Get your Browser Use API key from: https://cloud.browser-use.com/settings?tab=api-keys
+Get your OpenAI API key from: https://platform.openai.com/api-keys
 
 ### 3. Push Convex Schema
 ```bash
@@ -70,14 +72,37 @@ If you want to run the full agent swarm:
 ./start_orchestrator.sh
 ```
 
+## How It Works
+
+1. **AI Competitor Detection**: When you create a mission like "Find AI meeting note taker videos", GPT-4o analyzes it and returns the top competitor (e.g., "Granola")
+
+2. **TikTok Search**: The agent searches TikTok for that competitor brand
+
+3. **Methodical Analysis**: For each video (up to 20):
+   - Click on the video
+   - Wait for it to load (3 seconds)
+   - Read the metrics (views, likes, comments)
+   - Determine if it's viral (>100K views OR >10K likes)
+   - Log it as a discovery if viral
+   - Go back to search results
+   - Repeat
+
+4. **Live Streaming**: Watch everything happen in real-time via the iframe in your frontend
+
+5. **Discovery Database**: All viral videos are automatically saved to your Convex database
+
 ## Usage
 
 1. Make sure your 'pro' profile exists and is logged into TikTok
-2. Open the frontend at http://localhost:3000
-3. Enter a mission prompt (e.g., "Find trending dance videos" or "granola app reviews")
-4. Click "Create Mission"
-5. Watch as the livestream automatically appears showing the browser searching and analyzing TikTok videos in real-time!
-6. Relevant videos will appear in the "Latest Discoveries" section
+2. Set your `OPENAI_API_KEY` environment variable
+3. Open the frontend at http://localhost:3000
+4. Enter a mission prompt (e.g., "AI meeting note taker", "productivity app")
+5. Click "Create Mission"
+6. Watch as:
+   - GPT-4o identifies the competitor (e.g., "Granola")
+   - The agent searches TikTok for that competitor
+   - Each video is analyzed one by one
+   - Viral videos appear in "Latest Discoveries"
 
 ## Architecture
 
@@ -108,10 +133,12 @@ User creates mission → Convex database
 
 ## Features
 
+- **AI-Powered Competitor Search**: Uses GPT-4o to automatically identify competitor brands from your mission prompt
 - **No Login Required**: Uses Browser Use profiles - TikTok session persists across runs
-- **Mission-Based Search**: Searches for content that matches your mission prompt
+- **Methodical Video Analysis**: Analyzes each video one at a time with proper timing
+- **Metrics-Based Filtering**: Only logs videos with >100K views or >10K likes
 - **Real-time Viewing**: Watch the browser navigate TikTok live
-- **Automatic Discovery Logging**: Videos are analyzed and logged to your database
+- **Automatic Discovery Logging**: Viral videos are logged to your database
 - **Automatic Session Management**: Sessions are created and cleaned up automatically
 - **Share Links**: Optionally creates shareable public links
 - **Vision Mode**: Uses screenshot capability for better video analysis

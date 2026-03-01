@@ -8,15 +8,58 @@ Updates the mission with the live URL and session ID.
 import asyncio
 import os
 import sys
+import re
 from typing import Optional, List
 from convex import ConvexClient
 from browser_use_sdk import AsyncBrowserUse
+from openai import AsyncOpenAI
 
 
 # Configuration
 CONVEX_URL = os.environ.get("CONVEX_URL", "https://flexible-retriever-257.convex.cloud")
 BROWSER_USE_API_KEY = os.environ.get("BROWSER_USE_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 POLL_INTERVAL = 3  # seconds
+
+
+async def get_competitor_search_term(mission_prompt: str) -> str:
+    """Use OpenAI to generate a competitor search term from the mission prompt."""
+    try:
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a search-query generator for social media research. "
+                        "Given a short mission prompt describing creative content to find (e.g., 'pirate movie trailer'), "
+                        "produce a concise TikTok search phrase that will return relevant videos. "
+                        "Include specific keywords such as the movie or franchise name, the word 'trailer' or 'official trailer', "
+                        "and other helpful modifiers (e.g., 'clip', 'teaser', franchise name). "
+                        "Do NOT return only a company or brand name. Return ONLY the search query string on a single line, nothing else."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Create a TikTok search phrase for this mission: {mission_prompt}\n"
+                        "Example: for 'pirate movie trailer' return 'disney pirates of the caribbean trailer'"
+                    )
+                }
+            ],
+            temperature=0.2,
+            max_tokens=80
+        )
+
+        search_term = response.choices[0].message.content.strip().strip('"')
+        print(f"🤖 AI generated search term: '{search_term}' for mission: '{mission_prompt}'")
+        return search_term
+        
+    except Exception as e:
+        print(f"⚠️  Error calling OpenAI: {e}")
+        print(f"📝 Falling back to original prompt")
+        return mission_prompt
 
 
 class MissionLivestreamWatcher:
@@ -110,115 +153,263 @@ class MissionLivestreamWatcher:
                 update_args
             )
             
-            print(f"🎬 Starting TikTok search and analysis...\n")
-            print(f"📝 Mission: {prompt}\n")
+            # Get the search term using AI
+            search_term = await get_competitor_search_term(prompt)
             
-            # Search task (no login needed - already logged in via profile)
+            print(f"🎬 Starting TikTok search and analysis...\n")
+            print(f"📝 Original Mission: {prompt}")
+            print(f"🔍 Searching for: {search_term}\n")
+            
+            # Phase 1: Search for competitor
             search_task = f"""
             Go to TikTok (tiktok.com). You are already logged in.
             
-            Go to the search page and search for: "{prompt}"
+            Go to the search page and search for: "{search_term}"
             
-            Wait for search results to load, then scroll down slowly 2-3 times.
+            Wait for search results to load. Look at the videos displayed.
             """
             
-            print("🔍 Starting search...")
-            step_count = 0
+            print("🔍 Phase 1: Searching for competitor content...")
             
             async for step in self.browser_client.run(
                 search_task,
                 session_id=session.id,
                 start_url="https://www.tiktok.com",
-                max_steps=30,
+                max_steps=20,
                 vision=True,
             ):
-                step_count += 1
-                if step_count % 3 == 0:
-                    print(f"   Step {step.number}: {step.next_goal[:80]}...")
+                pass  # Complete search
             
             print("✅ Search complete\n")
             
-            # Phase 2: Scroll and analyze videos
-            print("🔍 Analyzing videos...")
+            # Phase 2: Click and analyze viral videos
+            print("🎥 Phase 2: Collecting viral videos...\n")
             
-            # Run multiple analysis cycles
-            for cycle in range(5):  # 5 cycles of analysis
-                print(f"\n📊 Analysis cycle {cycle + 1}/5")
-                
-                # Scroll and collect videos
-                scroll_task = """
-                Scroll down through the TikTok search results slowly.
-                Scroll down 3-5 times, pausing between scrolls to let videos load.
-                """
-                
-                async for step in self.browser_client.run(
-                    scroll_task,
-                    session_id=session.id,
-                    max_steps=10,
-                    vision=True,
-                ):
-                    pass  # Just scroll
-                
-                # Now analyze what's on screen
-                analyze_task = f"""
-                Look at the TikTok videos currently visible on the screen.
-                
-                For each video you can see:
-                1. Read the video title/caption
-                2. Look at the thumbnail
-                3. Check the creator name and account
-                4. Evaluate if it matches this mission: "{prompt}"
-                
-                For ANY video that is relevant to "{prompt}", extract:
-                - The full video URL (TikTok share link)
-                - The thumbnail image URL
-                - The video title/caption
-                - A brief explanation of why it's relevant
-                
-                Return a list of ALL relevant videos you find.
-                Be thorough but selective - only include videos that truly match the mission.
-                """
+            discoveries_count = 0
+            discovered_screenshots = []  # Store screenshots of discoveries
+            
+            # Analyze 15-20 videos one at a time
+            for video_num in range(1, 21):
+                print(f"📹 Video {video_num}/20 - Starting analysis...")
                 
                 try:
-                    # Use structured output to get video discoveries
-                    result = await self.browser_client.run(
-                        analyze_task,
+                    # Step 1: Click on a viral video
+                    print(f"   🖱️  Finding and clicking video...")
+                    click_video_task = f"""
+                    You are on the TikTok search results page for "{search_term}".
+                    
+                    Look at all the videos visible on screen.
+                    Find ONE video that:
+                    - Has high view count visible (look for "100K", "500K", "1M", etc.)
+                    - Has lots of likes (heart icon with big numbers)
+                    - You haven't clicked on yet in this session
+                    
+                    Prioritize videos with the HIGHEST engagement numbers.
+                    
+                    Click on that ONE video to open it and watch it.
+                    DO NOT go to the next video yet - just click this one video.
+                    """
+                    
+                    current_url = None
+                    async for step in self.browser_client.run(
+                        click_video_task,
                         session_id=session.id,
                         max_steps=15,
                         vision=True,
-                    )
+                    ):
+                        if step.url and "tiktok.com/@" in step.url:
+                            current_url = step.url
                     
-                    # The result should contain information we can parse
-                    if hasattr(result, 'output') and result.output:
-                        output_str = str(result.output)
-                        print(f"   Analysis output: {output_str[:200]}...")
+                    if not current_url:
+                        print(f"   ⚠️  Could not get video URL, skipping...")
+                        continue
+                    
+                    print(f"   ✅ Opened video: {current_url[:60]}...")
+                    
+                    # Step 2: Wait for video to load and play
+                    print(f"   ⏱️  Waiting for video to load...")
+                    await asyncio.sleep(3)  # Give time for video to load and play
+                    
+                    # Step 3: Take screenshot and use OCR to detect likes
+                    print(f"   📸 Taking screenshot for OCR analysis...")
+                    screenshot_task = "Take a screenshot of the current page showing the TikTok video and its metrics."
+                    screenshot_url = None
+                    
+                    async for step in self.browser_client.run(
+                        screenshot_task,
+                        session_id=session.id,
+                        max_steps=2,
+                        vision=True,
+                    ):
+                        if hasattr(step, 'screenshot_url') and step.screenshot_url:
+                            screenshot_url = step.screenshot_url
+                    
+                    if not screenshot_url:
+                        print(f"   ⚠️  Could not capture screenshot, skipping...")
+                        continue
+                    
+                    print(f"   🔍 Running OCR on screenshot: {screenshot_url}")
+                    
+                    # Use OpenAI Vision API to read the likes number from screenshot
+                    likes_count = 0
+                    is_viral = False
+                    
+                    try:
+                        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
                         
-                        # Look for TikTok URLs in the output
-                        import re
-                        tiktok_urls = re.findall(r'https?://(?:www\.)?tiktok\.com/@[\w.-]+/video/\d+', output_str)
+                        response = await client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": """Look at this TikTok video screenshot. On the RIGHT side, find the heart icon (like button) and read the number next to it.
+
+The number might be formatted as:
+- Plain number like "1949" or "52"
+- With K like "1.2K" or "450K"
+- With M like "1.5M" or "2M"
+
+Respond with ONLY the number you see next to the heart icon. Just the number, nothing else.
+
+Examples:
+- If you see "1949" → respond "1949"
+- If you see "52" → respond "52"
+- If you see "1.2K" → respond "1.2K"
+- If you see "450K" → respond "450K"
+"""
+                                        },
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": screenshot_url
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            max_tokens=50
+                        )
                         
-                        for video_url in tiktok_urls:
-                            try:
-                                # Log discovery to Convex
-                                self.convex_client.mutation(
-                                    "discoveries:logDiscovery",
-                                    {
-                                        "video_url": video_url,
-                                        "thumbnail": "",  # Will be empty for now
-                                        "found_by_agent_id": 1,
-                                    }
-                                )
-                                print(f"   ✨ Logged discovery: {video_url}")
-                            except Exception as e:
-                                print(f"   ⚠️  Error logging discovery: {e}")
-                
+                        ocr_result = response.choices[0].message.content.strip()
+                        print(f"   📊 OCR Result: {ocr_result}")
+                        
+                        # Parse the likes count
+                        patterns = [
+                            r'(\d+\.?\d*)[Mm]',  # Matches 1.2M, 5M
+                            r'(\d+\.?\d*)[Kk]',  # Matches 1.2K, 450K
+                            r'(\d+)',             # Matches plain numbers
+                        ]
+                        
+                        for pattern in patterns:
+                            match = re.search(pattern, ocr_result)
+                            if match:
+                                number_str = match.group(0)
+                                
+                                # Convert to integer
+                                if 'M' in number_str.upper():
+                                    likes_count = int(float(number_str.replace('M', '').replace('m', '')) * 1_000_000)
+                                elif 'K' in number_str.upper():
+                                    likes_count = int(float(number_str.replace('K', '').replace('k', '')) * 1_000)
+                                else:
+                                    likes_count = int(number_str.replace(',', ''))
+                                
+                                print(f"   📈 Parsed likes: {likes_count:,}")
+                                break
+                        
+                        # Check if it meets threshold (50+ likes)
+                        if likes_count >= 50:
+                            is_viral = True
+                            print(f"   ✅ VIRAL! ({likes_count:,} likes >= 50)")
+                        else:
+                            print(f"   ⏭️  Not viral ({likes_count:,} likes < 50)")
+                            
+                    except Exception as e:
+                        print(f"   ⚠️  OCR Error: {e}")
+                        print(f"   ⏭️  Skipping this video")
+                        is_viral = False
+                    
+                    # Only log if viral
+                    if is_viral and current_url:
+                        try:
+                            # Log to Convex
+                            self.convex_client.mutation(
+                                "discoveries:logDiscovery",
+                                {
+                                    "video_url": current_url,
+                                    "thumbnail": "",
+                                    "found_by_agent_id": 1,
+                                }
+                            )
+                            discoveries_count += 1
+                            
+                            # Store screenshot info
+                            discovery_info = {
+                                "url": current_url,
+                                "screenshot": screenshot_url,
+                                "metrics": f"{likes_count:,} likes"
+                            }
+                            discovered_screenshots.append(discovery_info)
+                            
+                            print(f"   ✨ DISCOVERY #{discoveries_count} LOGGED!")
+                            print(f"   🔗 {current_url}")
+                            print(f"   💖 {likes_count:,} likes")
+                            print(f"   📸 Screenshot: {screenshot_url}")
+                        except Exception as e:
+                            print(f"   ⚠️  Error logging discovery: {e}")
+                    
+                    # Step 4: Go back to search results
+                    print(f"   ⬅️  Going back to search results...")
+                    go_back_task = """
+                    Navigate back to the search results page.
+                    You can click the back button or use browser navigation.
+                    Wait for the search results to load again.
+                    """
+                    
+                    async for step in self.browser_client.run(
+                        go_back_task,
+                        session_id=session.id,
+                        max_steps=8,
+                        vision=True,
+                    ):
+                        pass
+                    
+                    # Small pause before next video
+                    await asyncio.sleep(1)
+                    print("")  # Blank line for readability
+                    
                 except Exception as e:
-                    print(f"   ⚠️  Error in analysis: {e}")
-                
-                # Small delay between cycles
-                await asyncio.sleep(2)
+                    print(f"   ❌ Error: {e}")
+                    # Try to recover by going back
+                    try:
+                        async for step in self.browser_client.run(
+                            "Go back to the TikTok search results page",
+                            session_id=session.id,
+                            max_steps=5,
+                            vision=True,
+                        ):
+                            pass
+                    except:
+                        pass
+                    await asyncio.sleep(1)
+                    continue
             
-            print(f"\n✅ Task completed for mission {mission_id}")
+            print(f"\n🎉 Analysis complete!")
+            print(f"📊 Total discoveries logged: {discoveries_count}/20")
+            
+            # Display all screenshots at the end
+            if discovered_screenshots:
+                print(f"\n📸 ========== DISCOVERY SCREENSHOTS ==========\n")
+                for i, discovery in enumerate(discovered_screenshots, 1):
+                    print(f"Discovery #{i}:")
+                    print(f"  🔗 URL: {discovery['url']}")
+                    print(f"  📈 Metrics: {discovery['metrics']}")
+                    if discovery['screenshot']:
+                        print(f"  📸 Screenshot: {discovery['screenshot']}")
+                    print()
+                print(f"📸 ==========================================\n")
             
         except Exception as e:
             print(f"❌ Error starting livestream for mission {mission_id}: {e}")
@@ -262,6 +453,12 @@ async def main():
         print("❌ Error: BROWSER_USE_API_KEY environment variable not set")
         print("   Get your API key from: https://cloud.browser-use.com/settings?tab=api-keys")
         print("   Then run: export BROWSER_USE_API_KEY='your_key'")
+        sys.exit(1)
+    
+    if not OPENAI_API_KEY:
+        print("❌ Error: OPENAI_API_KEY environment variable not set")
+        print("   Get your API key from: https://platform.openai.com/api-keys")
+        print("   Then run: export OPENAI_API_KEY='your_key'")
         sys.exit(1)
     
     # Create and start the watcher
