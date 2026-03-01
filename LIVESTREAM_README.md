@@ -2,10 +2,27 @@
 
 ## Overview
 When you create a new mission in the SwarmCast UI, the system automatically:
-1. Starts a live browser session
-2. Goes to TikTok and opens the "For You" feed
-3. Scrolls through videos
-4. Displays the live browser view in an iframe on the frontend
+1. Starts a live browser session using the 'pro' profile (already logged into TikTok)
+2. Goes to TikTok search and searches for your mission prompt
+3. Scrolls through and analyzes videos for relevance
+4. Logs matching videos to the discoveries database
+5. Displays the live browser view in an iframe on the frontend
+
+## Prerequisites
+
+### 1. Create a Browser Use Profile
+You need a profile named 'pro' that's already logged into TikTok:
+
+```bash
+# Option 1: Sync your local browser cookies to the cloud
+export BROWSER_USE_API_KEY='your_key'
+curl -fsSL https://browser-use.com/profile.sh | sh
+# Then name it 'pro' when prompted
+
+# Option 2: Use the Browser Use dashboard to create a profile
+# Go to https://cloud.browser-use.com/profiles
+# Create a profile named 'pro' and login to TikTok manually
+```
 
 ## Setup
 
@@ -55,10 +72,12 @@ If you want to run the full agent swarm:
 
 ## Usage
 
-1. Open the frontend at http://localhost:3000
-2. Enter a mission prompt (e.g., "Find trending dance videos")
-3. Click "Create Mission"
-4. Watch as the livestream automatically appears showing the browser navigating TikTok in real-time!
+1. Make sure your 'pro' profile exists and is logged into TikTok
+2. Open the frontend at http://localhost:3000
+3. Enter a mission prompt (e.g., "Find trending dance videos" or "granola app reviews")
+4. Click "Create Mission"
+5. Watch as the livestream automatically appears showing the browser searching and analyzing TikTok videos in real-time!
+6. Relevant videos will appear in the "Latest Discoveries" section
 
 ## Architecture
 
@@ -67,9 +86,13 @@ User creates mission → Convex database
                             ↓
             Mission Watcher detects new mission
                             ↓
-            Browser Use Cloud creates session
+            Browser Use Cloud creates session with 'pro' profile
                             ↓
-            TikTok automation starts (scroll, browse)
+            TikTok search starts (already logged in via profile)
+                            ↓
+            Agent scrolls, analyzes, and extracts relevant videos
+                            ↓
+    Discoveries logged to Convex → Frontend displays in "Latest Discoveries"
                             ↓
     Live URL stored in mission record → Frontend displays iframe
 ```
@@ -85,13 +108,25 @@ User creates mission → Convex database
 
 ## Features
 
+- **No Login Required**: Uses Browser Use profiles - TikTok session persists across runs
+- **Mission-Based Search**: Searches for content that matches your mission prompt
 - **Real-time Viewing**: Watch the browser navigate TikTok live
+- **Automatic Discovery Logging**: Videos are analyzed and logged to your database
 - **Automatic Session Management**: Sessions are created and cleaned up automatically
 - **Share Links**: Optionally creates shareable public links
-- **Continuous Scrolling**: Agent keeps browsing until the task completes
-- **Vision Mode**: Uses screenshot capability for better interaction
+- **Vision Mode**: Uses screenshot capability for better video analysis
 
 ## Troubleshooting
+
+### Profile 'pro' not found
+- Make sure you've created a profile named 'pro' in Browser Use
+- Use the profile sync script: `curl -fsSL https://browser-use.com/profile.sh | sh`
+- Or create it manually at https://cloud.browser-use.com/profiles
+
+### Not logged into TikTok
+- The 'pro' profile needs to be logged into TikTok first
+- Create a session manually, login to TikTok, then save the profile
+- Profile state persists across sessions (cookies, localStorage)
 
 ### No livestream appearing
 - Check that `mission_livestream_watcher.py` is running
@@ -103,6 +138,7 @@ User creates mission → Convex database
 - Check browser console for security errors
 - Verify the `liveUrl` is present in the mission record
 
-### Session stays active too long
-- The script automatically cleans up sessions after the task completes
-- You can manually stop the watcher with Ctrl+C to clean up all sessions
+### No discoveries being logged
+- Check the terminal output for "✨ Logged discovery" messages
+- The agent needs to find TikTok URLs in the page
+- Try a more specific mission prompt for better matching
