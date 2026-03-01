@@ -12,6 +12,18 @@ export default function Home() {
   const allAgents = useQuery(api.agents.getAllAgents);
   const discoveries = useQuery(api.discoveries.getDiscoveries);
   
+  // Debug logging
+  if (latestMission) {
+    console.log('Latest mission data:', {
+      hasLiveUrl: !!latestMission.liveUrl,
+      hasLiveUrl2: !!latestMission.liveUrl2,
+      hasLiveUrl3: !!latestMission.liveUrl3,
+      liveUrl: latestMission.liveUrl?.substring(0, 50),
+      liveUrl2: latestMission.liveUrl2?.substring(0, 50),
+      liveUrl3: latestMission.liveUrl3?.substring(0, 50),
+    });
+  }
+  
   // Mutations
   const createMission = useMutation(api.missions.createMission);
   const deleteAllMissions = useMutation(api.missions.deleteAllMissions);
@@ -50,19 +62,46 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Livestream View */}
-      {latestMission?.liveUrl && (
+      {/* Livestream View - 3 Streams */}
+      {(latestMission?.liveUrl || latestMission?.liveUrl2 || latestMission?.liveUrl3) && (
         <div className="mb-8 p-4 border border-green-600 rounded">
           <h2 className="text-xl font-semibold mb-4 text-green-400">
-            🔴 Live TikTok Stream
+            🔴 Live TikTok Streams ({[latestMission.liveUrl, latestMission.liveUrl2, latestMission.liveUrl3].filter(Boolean).length})
           </h2>
-          <div className="bg-gray-900 rounded overflow-hidden">
-            <iframe
-              src={latestMission.liveUrl}
-              className="w-full h-[600px] border-0"
-              title="Browser Livestream"
-              allow="autoplay; fullscreen"
-            />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {latestMission.liveUrl && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-green-900">Stream 1</div>
+                <iframe
+                  src={latestMission.liveUrl}
+                  className="w-full h-[500px] border-0"
+                  title="Browser Livestream 1"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl2 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-green-900">Stream 2</div>
+                <iframe
+                  src={latestMission.liveUrl2}
+                  className="w-full h-[500px] border-0"
+                  title="Browser Livestream 2"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
+            {latestMission.liveUrl3 && (
+              <div className="bg-gray-900 rounded overflow-hidden">
+                <div className="text-sm font-semibold p-2 bg-green-900">Stream 3</div>
+                <iframe
+                  src={latestMission.liveUrl3}
+                  className="w-full h-[500px] border-0"
+                  title="Browser Livestream 3"
+                  allow="autoplay; fullscreen"
+                />
+              </div>
+            )}
           </div>
           {latestMission.shareUrl && (
             <div className="mt-2 text-sm text-gray-400">
@@ -71,6 +110,16 @@ export default function Home() {
           )}
         </div>
       )}
+
+      {/* Add CSS to hide everything except screencast_viewer */}
+      <style jsx global>{`
+        iframe {
+          pointer-events: none;
+        }
+        iframe body > *:not(.screencast_viewer) {
+          display: none !important;
+        }
+      `}</style>
 
       {/* Three Column Layout */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

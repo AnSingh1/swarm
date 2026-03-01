@@ -6,6 +6,8 @@ export default defineSchema({
     prompt: v.string(),
     status: v.union(v.literal("active"), v.literal("completed")),
     liveUrl: v.optional(v.string()),
+    liveUrl2: v.optional(v.string()),
+    liveUrl3: v.optional(v.string()),
     sessionId: v.optional(v.string()),
     shareUrl: v.optional(v.string()),
   }),

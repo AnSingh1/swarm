@@ -26,15 +26,21 @@ export const updateMissionLivestream = mutation({
   args: {
     missionId: v.id("missions"),
     liveUrl: v.string(),
+    liveUrl2: v.optional(v.string()),
+    liveUrl3: v.optional(v.string()),
     sessionId: v.string(),
     shareUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.missionId, {
+    const update: any = {
       liveUrl: args.liveUrl,
       sessionId: args.sessionId,
-      shareUrl: args.shareUrl,
-    });
+    };
+    if (args.liveUrl2) update.liveUrl2 = args.liveUrl2;
+    if (args.liveUrl3) update.liveUrl3 = args.liveUrl3;
+    if (args.shareUrl) update.shareUrl = args.shareUrl;
+    
+    await ctx.db.patch(args.missionId, update);
   },
 });
 

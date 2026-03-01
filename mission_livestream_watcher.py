@@ -22,8 +22,8 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 POLL_INTERVAL = 3  # seconds
 
 
-async def get_competitor_search_term(mission_prompt: str) -> str:
-    """Use OpenAI to generate a competitor search term from the mission prompt."""
+async def get_competitor_search_terms(mission_prompt: str) -> List[str]:
+    """Use OpenAI to generate 3 competitor search terms from the mission prompt."""
     try:
         client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         response = await client.chat.completions.create(
@@ -32,34 +32,62 @@ async def get_competitor_search_term(mission_prompt: str) -> str:
                 {
                     "role": "system",
                     "content": (
-                        "You are a search-query generator for social media research. "
-                        "Given a short mission prompt describing creative content to find (e.g., 'pirate movie trailer'), "
-                        "produce a concise TikTok search phrase that will return relevant videos. "
-                        "Include specific keywords such as the movie or franchise name, the word 'trailer' or 'official trailer', "
-                        "and other helpful modifiers (e.g., 'clip', 'teaser', franchise name). "
-                        "Do NOT return only a company or brand name. Return ONLY the search query string on a single line, nothing else."
+                        "You are a competitive intelligence expert. "
+                        "Given a product category, return EXACTLY 3 competitor BRAND/COMPANY NAMES ONLY. "
+                        "DO NOT return generic search phrases. DO NOT add words like 'app', 'demo', 'tutorial', 'review'. "
+                        "Return ONLY the actual company or product brand names, one per line. "
+                        "Examples:\n"
+                        "Input: 'AI meeting note taker'\n"
+                        "Output:\n"
+                        "Otter.ai\n"
+                        "Fireflies.ai\n"
+                        "Fathom\n\n"
+                        "Input: 'project management tool'\n"
+                        "Output:\n"
+                        "Asana\n"
+                        "Monday.com\n"
+                        "ClickUp\n\n"
+                        "Input: 'video editor'\n"
+                        "Output:\n"
+                        "CapCut\n"
+                        "Adobe Premiere Pro\n"
+                        "DaVinci Resolve"
                     )
                 },
                 {
                     "role": "user",
-                    "content": (
-                        f"Create a TikTok search phrase for this mission: {mission_prompt}\n"
-                        "Example: for 'pirate movie trailer' return 'disney pirates of the caribbean trailer'"
-                    )
+                    "content": mission_prompt
                 }
             ],
             temperature=0.2,
-            max_tokens=80
+            max_tokens=100
         )
 
-        search_term = response.choices[0].message.content.strip().strip('"')
-        print(f"🤖 AI generated search term: '{search_term}' for mission: '{mission_prompt}'")
-        return search_term
+        search_terms_text = response.choices[0].message.content.strip()
+        # Split by newlines and clean up
+        search_terms = []
+        for line in search_terms_text.split('\n'):
+            # Remove numbering, bullets, extra whitespace
+            cleaned = line.strip().strip('123456789.-)').strip().strip('"').strip(',')
+            if cleaned and len(cleaned) > 1:
+                search_terms.append(cleaned)
+        
+        search_terms = search_terms[:3]
+        
+        # Ensure we have exactly 3 terms
+        while len(search_terms) < 3:
+            search_terms.append(mission_prompt)
+        
+        print(f"🤖 AI generated 3 competitor brands for mission: '{mission_prompt}'")
+        for i, term in enumerate(search_terms, 1):
+            print(f"   {i}. {term}")
+        
+        return search_terms
         
     except Exception as e:
         print(f"⚠️  Error calling OpenAI: {e}")
-        print(f"📝 Falling back to original prompt")
-        return mission_prompt
+        print(f"📝 Falling back to original prompt (3 copies)")
+        return [mission_prompt, mission_prompt, mission_prompt]
 
 
 class MissionLivestreamWatcher:
@@ -70,8 +98,13 @@ class MissionLivestreamWatcher:
         self.active_sessions = {}
         self.profile_id: Optional[str] = None
         
-    async def get_profile_id(self):
-        return "06fb7076-4c7d-4264-b53a-e4726c597ac0"
+    async def get_profile_ids(self):
+        """Return 3 profile IDs for concurrent sessions."""
+        return [
+            "06fb7076-4c7d-4264-b53a-e4726c597ac0",
+            "31203964-ed13-454f-a27e-0c3054751a8a",
+            "8e063dd1-26ab-40ff-bf10-74813b2933e6"
+        ]
         
     async def watch_missions(self):
         """Continuously watch for new missions and start livestreams."""
@@ -106,61 +139,163 @@ class MissionLivestreamWatcher:
                 await asyncio.sleep(POLL_INTERVAL)
     
     async def start_livestream(self, mission):
-        """Start a TikTok livestream for the given mission."""
+        """Start 3 concurrent TikTok livestreams for the given mission."""
         mission_id = mission["_id"]
         prompt = mission["prompt"]
         
         try:
-            print(f"🚀 Creating browser session for mission {mission_id}...")
+            print(f"🚀 Creating 3 browser sessions for mission {mission_id}...")
             
-            # Get the 'pro' profile ID (already logged into TikTok)
-            profile_id = await self.get_profile_id()
+            # Get 3 search terms and 3 profile IDs
+            search_terms = await get_competitor_search_terms(prompt)
+            profile_ids = await self.get_profile_ids()
             
-            # Create a session with US proxy and the 'pro' profile
-            session = await self.browser_client.sessions.create(
-                proxy_country_code="us",
-                profile_id=profile_id
-            )
+            print(f"\n📝 Original Mission: {prompt}\n")
             
-            print(f"✅ Session created: {session.id}")
-            print(f"🔐 Using profile 'pro' (already logged into TikTok)")
-            print(f"📺 Live view URL: {session.live_url}")
+            # Create 3 sessions concurrently
+            sessions = []
+            live_urls = []
+            session_tasks = []
             
-            # Store the session
-            self.active_sessions[mission_id] = session
+            for i, (search_term, profile_id) in enumerate(zip(search_terms, profile_ids), 1):
+                print(f"\n📺 Session {i}/3:")
+                print(f"   🔍 Search term: {search_term}")
+                print(f"   🔐 Profile ID: {profile_id[:8]}...")
+                
+                try:
+                    # Create session
+                    session = await self.browser_client.sessions.create(
+                        proxy_country_code="us",
+                        profile_id=profile_id
+                    )
+                    
+                    sessions.append(session)
+                    live_urls.append(session.live_url)
+                    
+                    print(f"   ✅ Session created: {session.id}")
+                    print(f"   📺 Live URL: {session.live_url}")
+                    
+                    # Update agent state in Convex
+                    try:
+                        self.convex_client.mutation(
+                            "agents:updateAgentState",
+                            {
+                                "agent_id": i,
+                                "status": "searching",
+                                "current_url": session.live_url,
+                                "profile_id": profile_id,
+                            }
+                        )
+                        print(f"   ✅ Agent {i} registered in Convex")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not register agent: {e}")
+                    
+                    # Try to create share link
+                    try:
+                        share = await self.browser_client.sessions.create_share(session.id)
+                        print(f"   🌐 Share URL: {share.url}")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not create share link: {e}")
+                    
+                except Exception as e:
+                    print(f"   ❌ Error creating session {i}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Don't skip - add placeholder so indexing stays correct
+                    sessions.append(None)
+                    live_urls.append(None)
             
-            # Try to create a public share link
-            share_url = None
-            try:
-                share = await self.browser_client.sessions.create_share(session.id)
-                share_url = share.url
-                print(f"🌐 Public share URL: {share_url}")
-            except Exception as e:
-                print(f"⚠️  Could not create share link: {e}")
+            # Store sessions (filter out None values)
+            valid_sessions = [s for s in sessions if s is not None]
+            self.active_sessions[mission_id] = valid_sessions
             
-            # Update the mission with livestream URLs
-            print(f"💾 Updating mission with livestream URLs...")
+            # Filter out None URLs
+            valid_live_urls = [url for url in live_urls if url is not None]
+            
+            # Update mission with all 3 live URLs
+            print(f"\n💾 Updating mission with {len(valid_live_urls)} livestream URLs...")
             update_args = {
                 "missionId": str(mission_id) if not isinstance(mission_id, str) else mission_id,
-                "liveUrl": session.live_url,
-                "sessionId": str(session.id),
+                "liveUrl": valid_live_urls[0] if len(valid_live_urls) > 0 else "",
+                "sessionId": str(valid_sessions[0].id) if len(valid_sessions) > 0 else "",
             }
-            if share_url:
-                update_args["shareUrl"] = share_url
+            if len(valid_live_urls) > 1:
+                update_args["liveUrl2"] = valid_live_urls[1]
+                print(f"   📺 Stream 2: {valid_live_urls[1][:50]}...")
+            if len(valid_live_urls) > 2:
+                update_args["liveUrl3"] = valid_live_urls[2]
+                print(f"   📺 Stream 3: {valid_live_urls[2][:50]}...")
+            
+            print(f"   🔍 Debug - Update args: {update_args.keys()}")
             
             self.convex_client.mutation(
                 "missions:updateMissionLivestream",
                 update_args
             )
             
-            # Get the search term using AI
-            search_term = await get_competitor_search_term(prompt)
+            print(f"\n🎬 Starting parallel TikTok analysis on {len(valid_sessions)} sessions...\n")
             
-            print(f"🎬 Starting TikTok search and analysis...\n")
-            print(f"📝 Original Mission: {prompt}")
-            print(f"🔍 Searching for: {search_term}\n")
+            # Run all sessions concurrently (filter valid sessions)
+            analysis_tasks = []
+            for i, (session, search_term) in enumerate([(s, st) for s, st in zip(sessions, search_terms) if s is not None], 1):
+                task = asyncio.create_task(
+                    self.run_single_session_analysis(session, search_term, i)
+                )
+                analysis_tasks.append(task)
             
-            # Phase 1: Search for competitor
+            # Wait for all analysis tasks to complete
+            results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
+            
+            # Display summary
+            total_discoveries = 0
+            print(f"\n\n{'='*60}")
+            print(f"🎉 ALL SESSIONS COMPLETE!")
+            print(f"{'='*60}\n")
+            
+            for i, result in enumerate(results, 1):
+                if isinstance(result, Exception):
+                    print(f"Session {i}: ❌ Error - {result}")
+                elif isinstance(result, dict):
+                    total_discoveries += result.get('discoveries', 0)
+                    print(f"Session {i}: ✅ {result.get('discoveries', 0)} discoveries logged")
+            
+            print(f"\n📊 TOTAL DISCOVERIES ACROSS ALL SESSIONS: {total_discoveries}")
+            print(f"{'='*60}\n")
+            
+        except Exception as e:
+            print(f"❌ Error starting livestream for mission {mission_id}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        finally:
+            # Keep sessions alive for viewing
+            print("\n⏳ Keeping sessions alive for 30 seconds...")
+            await asyncio.sleep(30)
+            
+            # Clean up all sessions
+            if mission_id in self.active_sessions:
+                await self.cleanup_session(mission_id)
+    
+    async def run_single_session_analysis(self, session, search_term: str, session_num: int):
+        """Run analysis on a single TikTok session."""
+        try:
+            print(f"[Session {session_num}] 🔍 Starting search for: {search_term}")
+            
+            # Update agent status to searching
+            try:
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": session_num,
+                        "status": "searching",
+                        "current_url": f"Searching for: {search_term}",
+                        "profile_id": (await self.get_profile_ids())[session_num - 1],
+                    }
+                )
+            except Exception as e:
+                print(f"[Session {session_num}] ⚠️  Could not update agent status: {e}")
+            
+            # Phase 1: Search for content
             search_task = f"""
             Go to TikTok (tiktok.com). You are already logged in.
             
@@ -168,8 +303,6 @@ class MissionLivestreamWatcher:
             
             Wait for search results to load. Look at the videos displayed.
             """
-            
-            print("🔍 Phase 1: Searching for competitor content...")
             
             async for step in self.browser_client.run(
                 search_task,
@@ -180,21 +313,21 @@ class MissionLivestreamWatcher:
             ):
                 pass  # Complete search
             
-            print("✅ Search complete\n")
+            print(f"[Session {session_num}] ✅ Search complete\n")
             
             # Phase 2: Click and analyze viral videos
-            print("🎥 Phase 2: Collecting viral videos...\n")
+            print(f"[Session {session_num}] 🎥 Collecting viral videos...\n")
             
             discoveries_count = 0
             discovered_screenshots = []  # Store screenshots of discoveries
             
             # Analyze 15-20 videos one at a time
             for video_num in range(1, 21):
-                print(f"📹 Video {video_num}/20 - Starting analysis...")
+                print(f"[Session {session_num}] 📹 Video {video_num}/20 - Starting analysis...")
                 
                 try:
                     # Step 1: Click on a viral video
-                    print(f"   🖱️  Finding and clicking video...")
+                    print(f"[Session {session_num}]    🖱️  Finding and clicking video...")
                     click_video_task = f"""
                     You are on the TikTok search results page for "{search_term}".
                     
@@ -221,17 +354,17 @@ class MissionLivestreamWatcher:
                             current_url = step.url
                     
                     if not current_url:
-                        print(f"   ⚠️  Could not get video URL, skipping...")
+                        print(f"[Session {session_num}]    ⚠️  Could not get video URL, skipping...")
                         continue
                     
-                    print(f"   ✅ Opened video: {current_url[:60]}...")
+                    print(f"[Session {session_num}]    ✅ Opened video: {current_url[:60]}...")
                     
                     # Step 2: Wait for video to load and play
-                    print(f"   ⏱️  Waiting for video to load...")
+                    print(f"[Session {session_num}]    ⏱️  Waiting for video to load...")
                     await asyncio.sleep(3)  # Give time for video to load and play
                     
                     # Step 3: Take screenshot and use OCR to detect likes
-                    print(f"   📸 Taking screenshot for OCR analysis...")
+                    print(f"[Session {session_num}]    📸 Taking screenshot for OCR analysis...")
                     screenshot_task = "Take a screenshot of the current page showing the TikTok video and its metrics."
                     screenshot_url = None
                     
@@ -245,10 +378,10 @@ class MissionLivestreamWatcher:
                             screenshot_url = step.screenshot_url
                     
                     if not screenshot_url:
-                        print(f"   ⚠️  Could not capture screenshot, skipping...")
+                        print(f"[Session {session_num}]    ⚠️  Could not capture screenshot, skipping...")
                         continue
                     
-                    print(f"   🔍 Running OCR on screenshot: {screenshot_url}")
+                    print(f"[Session {session_num}]    🔍 Running OCR on screenshot...")
                     
                     # Use OpenAI Vision API to read the likes number from screenshot
                     likes_count = 0
@@ -294,7 +427,7 @@ Examples:
                         )
                         
                         ocr_result = response.choices[0].message.content.strip()
-                        print(f"   📊 OCR Result: {ocr_result}")
+                        print(f"[Session {session_num}]    📊 OCR Result: {ocr_result}")
                         
                         # Parse the likes count
                         patterns = [
@@ -316,19 +449,19 @@ Examples:
                                 else:
                                     likes_count = int(number_str.replace(',', ''))
                                 
-                                print(f"   📈 Parsed likes: {likes_count:,}")
+                                print(f"[Session {session_num}]    📈 Parsed likes: {likes_count:,}")
                                 break
                         
                         # Check if it meets threshold (50+ likes)
                         if likes_count >= 50:
                             is_viral = True
-                            print(f"   ✅ VIRAL! ({likes_count:,} likes >= 50)")
+                            print(f"[Session {session_num}]    ✅ VIRAL! ({likes_count:,} likes >= 50)")
                         else:
-                            print(f"   ⏭️  Not viral ({likes_count:,} likes < 50)")
+                            print(f"[Session {session_num}]    ⏭️  Not viral ({likes_count:,} likes < 50)")
                             
                     except Exception as e:
-                        print(f"   ⚠️  OCR Error: {e}")
-                        print(f"   ⏭️  Skipping this video")
+                        print(f"[Session {session_num}]    ⚠️  OCR Error: {e}")
+                        print(f"[Session {session_num}]    ⏭️  Skipping this video")
                         is_viral = False
                     
                     # Only log if viral
@@ -339,11 +472,25 @@ Examples:
                                 "discoveries:logDiscovery",
                                 {
                                     "video_url": current_url,
-                                    "thumbnail": "",
-                                    "found_by_agent_id": 1,
+                                    "thumbnail": screenshot_url if screenshot_url else "",
+                                    "found_by_agent_id": session_num,
                                 }
                             )
                             discoveries_count += 1
+                            
+                            # Update agent status to found_trend
+                            try:
+                                self.convex_client.mutation(
+                                    "agents:updateAgentState",
+                                    {
+                                        "agent_id": session_num,
+                                        "status": "found_trend",
+                                        "current_url": current_url,
+                                        "profile_id": (await self.get_profile_ids())[session_num - 1],
+                                    }
+                                )
+                            except Exception as e:
+                                print(f"[Session {session_num}]    ⚠️  Could not update agent status: {e}")
                             
                             # Store screenshot info
                             discovery_info = {
@@ -353,15 +500,15 @@ Examples:
                             }
                             discovered_screenshots.append(discovery_info)
                             
-                            print(f"   ✨ DISCOVERY #{discoveries_count} LOGGED!")
-                            print(f"   🔗 {current_url}")
-                            print(f"   💖 {likes_count:,} likes")
-                            print(f"   📸 Screenshot: {screenshot_url}")
+                            print(f"[Session {session_num}]    ✨ DISCOVERY #{discoveries_count} LOGGED!")
+                            print(f"[Session {session_num}]    🔗 {current_url}")
+                            print(f"[Session {session_num}]    💖 {likes_count:,} likes")
+                            print(f"[Session {session_num}]    📸 Screenshot: {screenshot_url}")
                         except Exception as e:
-                            print(f"   ⚠️  Error logging discovery: {e}")
+                            print(f"[Session {session_num}]    ⚠️  Error logging discovery: {e}")
                     
                     # Step 4: Go back to search results
-                    print(f"   ⬅️  Going back to search results...")
+                    print(f"[Session {session_num}]    ⬅️  Going back to search results...")
                     go_back_task = """
                     Navigate back to the search results page.
                     You can click the back button or use browser navigation.
@@ -378,10 +525,9 @@ Examples:
                     
                     # Small pause before next video
                     await asyncio.sleep(1)
-                    print("")  # Blank line for readability
                     
                 except Exception as e:
-                    print(f"   ❌ Error: {e}")
+                    print(f"[Session {session_num}]    ❌ Error: {e}")
                     # Try to recover by going back
                     try:
                         async for step in self.browser_client.run(
@@ -396,48 +542,54 @@ Examples:
                     await asyncio.sleep(1)
                     continue
             
-            print(f"\n🎉 Analysis complete!")
-            print(f"📊 Total discoveries logged: {discoveries_count}/20")
+            print(f"\n[Session {session_num}] 🎉 Analysis complete!")
+            print(f"[Session {session_num}] 📊 Discoveries logged: {discoveries_count}/20\n")
             
-            # Display all screenshots at the end
-            if discovered_screenshots:
-                print(f"\n📸 ========== DISCOVERY SCREENSHOTS ==========\n")
-                for i, discovery in enumerate(discovered_screenshots, 1):
-                    print(f"Discovery #{i}:")
-                    print(f"  🔗 URL: {discovery['url']}")
-                    print(f"  📈 Metrics: {discovery['metrics']}")
-                    if discovery['screenshot']:
-                        print(f"  📸 Screenshot: {discovery['screenshot']}")
-                    print()
-                print(f"📸 ==========================================\n")
+            # Update agent status to idle
+            try:
+                self.convex_client.mutation(
+                    "agents:updateAgentState",
+                    {
+                        "agent_id": session_num,
+                        "status": "idle",
+                        "current_url": "Analysis complete",
+                        "profile_id": (await self.get_profile_ids())[session_num - 1],
+                    }
+                )
+            except Exception as e:
+                print(f"[Session {session_num}] ⚠️  Could not update agent status: {e}")
+            
+            return {"discoveries": discoveries_count, "screenshots": discovered_screenshots}
             
         except Exception as e:
-            print(f"❌ Error starting livestream for mission {mission_id}: {e}")
+            print(f"[Session {session_num}] ❌ Error in session: {e}")
             import traceback
             traceback.print_exc()
-        
-        finally:
-            # Keep session alive for viewing
-            print("\n⏳ Keeping session alive for 30 seconds...")
-            await asyncio.sleep(30)
-            
-            # Clean up the session
-            if mission_id in self.active_sessions:
-                await self.cleanup_session(mission_id)
+            return {"discoveries": 0, "screenshots": []}
     
     async def cleanup_session(self, mission_id):
-        """Clean up a specific session."""
+        """Clean up all sessions for a mission."""
         if mission_id not in self.active_sessions:
             return
         
-        session = self.active_sessions[mission_id]
+        sessions = self.active_sessions[mission_id]
+        
+        # Handle both single session (old format) and multiple sessions (new format)
+        if not isinstance(sessions, list):
+            sessions = [sessions]
+        
         try:
-            print(f"\n🧹 Cleaning up session for mission {mission_id}...")
-            await self.browser_client.sessions.stop(session.id)
-            await self.browser_client.sessions.delete(session.id)
-            print(f"✅ Session cleaned up for mission {mission_id}")
+            print(f"\n🧹 Cleaning up {len(sessions)} session(s) for mission {mission_id}...")
+            for i, session in enumerate(sessions, 1):
+                try:
+                    await self.browser_client.sessions.stop(session.id)
+                    await self.browser_client.sessions.delete(session.id)
+                    print(f"   ✅ Session {i}/{len(sessions)} cleaned up")
+                except Exception as e:
+                    print(f"   ⚠️  Error cleaning up session {i}: {e}")
+            print(f"✅ All sessions cleaned up for mission {mission_id}")
         except Exception as e:
-            print(f"⚠️  Error cleaning up session: {e}")
+            print(f"⚠️  Error cleaning up sessions: {e}")
         finally:
             del self.active_sessions[mission_id]
     
